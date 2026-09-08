@@ -246,6 +246,7 @@ class DesktopApp(tk.Tk):
         self._vd_type_rows: list[tk.Frame] = []
         self._vd_exclude_rows: list[tk.Frame] = []
         self._vd_report_rows: list[tk.Frame] = []
+        self._vd_duration_rule_rows: list[tk.Frame] = []
         self._vd_extra_col_rows: list[tk.Frame] = []
         self._catalog_exclude_rows: list[tk.Frame] = []
         self._posts_col_rows: list[tk.Frame] = []
@@ -836,6 +837,7 @@ class DesktopApp(tk.Tk):
             settings["vd_write_log"] = template == "video"
             settings.setdefault("vd_types", [])
             settings.setdefault("vd_report_categories", [])
+            settings.setdefault("vd_duration_rules", self._default_vd_duration_rules())
         if template == "posts":
             for key, value in self._posts_default_settings().items():
                 settings.setdefault(key, value)
@@ -1018,6 +1020,71 @@ class DesktopApp(tk.Tk):
                 )
         return out
 
+    @staticmethod
+    def _default_vd_duration_rules() -> list[dict]:
+        return [
+            {"name": "60秒内", "min_seconds": "", "max_seconds": "60"},
+            {"name": "61-180秒", "min_seconds": "60", "max_seconds": "180"},
+            {"name": "181秒以上", "min_seconds": "180", "max_seconds": ""},
+        ]
+
+    def _add_vd_duration_rule(self, item=None) -> None:
+        data = item if isinstance(item, dict) else {}
+        row = tk.Frame(self.vd_duration_rule_box, bg=C["card"])
+        row.pack(fill="x", pady=3)
+        name = tk.Entry(row, font=MONO, relief="solid", bd=1)
+        lower = tk.Entry(row, font=MONO, relief="solid", bd=1, width=14)
+        upper = tk.Entry(row, font=MONO, relief="solid", bd=1, width=14)
+        name.insert(0, str(data.get("name") or ""))
+        lower.insert(0, "" if data.get("min_seconds") in (None, "") else str(data.get("min_seconds")))
+        upper.insert(0, "" if data.get("max_seconds") in (None, "") else str(data.get("max_seconds")))
+        name.pack(side="left", fill="x", expand=True, ipady=4)
+        lower.pack(side="left", padx=(8, 0), ipady=4)
+        upper.pack(side="left", padx=(8, 0), ipady=4)
+        StyleBtn(row, "ghost", text="删除", command=lambda: self._del_vd_duration_rule(row)).pack(side="left", padx=(6, 0))
+        row._name = name
+        row._min = lower
+        row._max = upper
+        self._vd_duration_rule_rows.append(row)
+        self._upd_vd_duration_rule_count()
+
+    def _del_vd_duration_rule(self, row) -> None:
+        if row in self._vd_duration_rule_rows:
+            self._vd_duration_rule_rows.remove(row)
+        row.destroy()
+        if not self._vd_duration_rule_rows:
+            self._add_vd_duration_rule()
+        self._upd_vd_duration_rule_count()
+
+    def _upd_vd_duration_rule_count(self) -> None:
+        if hasattr(self, "vd_duration_rule_count"):
+            count = sum(1 for row in self._vd_duration_rule_rows if row._name.get().strip())
+            self.vd_duration_rule_count.configure(text=f"{count} 个时长区间")
+
+    def _read_vd_duration_rules(self) -> list[dict]:
+        rules: list[dict] = []
+        for row in self._vd_duration_rule_rows:
+            name = row._name.get().strip()
+            if not name:
+                continue
+            rules.append(
+                {
+                    "name": name,
+                    "min_seconds": row._min.get().strip() or None,
+                    "max_seconds": row._max.get().strip() or None,
+                }
+            )
+        return rules or self._default_vd_duration_rules()
+
+    def _set_vd_duration_rules(self, items) -> None:
+        for row in list(self._vd_duration_rule_rows):
+            row.destroy()
+        self._vd_duration_rule_rows = []
+        rules = [item for item in (items or []) if isinstance(item, dict)] or self._default_vd_duration_rules()
+        for item in rules:
+            self._add_vd_duration_rule(item)
+        self._upd_vd_duration_rule_count()
+
     def _add_vd_report_cat(self, value: str = "") -> None:
         row = tk.Frame(self.vd_report_cat_box, bg=C["card"])
         row.pack(fill="x", pady=3)
@@ -1121,6 +1188,8 @@ class DesktopApp(tk.Tk):
             self.vd_link_cell.grid_remove()
             self.vd_log_cell.grid_remove()
             self.vd_video_opts.pack_forget()
+            if hasattr(self, "vd_duration_rule_wrap"):
+                self.vd_duration_rule_wrap.pack_forget()
             if hasattr(self, "vd_report_cat_wrap"):
                 self.vd_report_cat_wrap.pack_forget()
             if hasattr(self, "vd_wildcard_note"):
@@ -1146,6 +1215,8 @@ class DesktopApp(tk.Tk):
             self.vd_link_cell.grid()
             self.vd_log_cell.grid()
             self.vd_video_opts.pack(fill="x", pady=4)
+            if hasattr(self, "vd_duration_rule_wrap"):
+                self.vd_duration_rule_wrap.pack(fill="x", pady=(8, 0), after=self.vd_video_opts)
             if hasattr(self, "vd_report_cat_wrap"):
                 self.vd_report_cat_wrap.pack(fill="x", pady=(8, 0))
             if hasattr(self, "vd_wildcard_note"):
@@ -1164,7 +1235,7 @@ class DesktopApp(tk.Tk):
                 "勾选「总计数」才把该分类按时长计入总计数；勾选「逐条」才按时长规则计入逐条计数。都不勾则只进日志和额外分类列。"
             )
             self.vd_dest_note.configure(
-                text="总计数 / 逐条计数只统计第 4 节勾选了对应项的分类。下面「额外分类列」一律按视频个数计，不按时长规则。"
+                text="可选择总秒数换算、逐条阶梯计数或按时长区间统计数量。时长区间模式每条视频只计入一个区间；额外分类列仍按视频个数计。"
             )
             self.vd_src_note.configure(
                 text="读取源表：A 列日期、B 列视频链接、H 列制作人（列字母可改）。B 列可以是蓝字文件名，程序会读取单元格里的超链接（Drive / YouTube），再写入另一张表的「日志表」和「数据表」。"
@@ -1174,7 +1245,7 @@ class DesktopApp(tk.Tk):
             self.vd_sched_check.configure(text="启用视频时长定时")
             self.vd_help_note.configure(
                 text="日志表：A 日期、B 链接、C 名字、D 时长(秒)、E 类型、F 备注（未识别原因）。已跑过的链接下次自动跳过。"
-                "数据表：每人两列（总计数、逐条计数），添加分类再加列；一人一色，姓名合并，人与人之间有分隔线。"
+                "数据表：普通模式显示总计数和逐条计数；时长区间模式分别显示每个区间的视频数量。添加分类还能继续加列。"
                 "未识别常见原因：不是视频、没有权限、Drive 还没生成时长。源表和 Drive 文件都要共享给服务账号。"
             )
 
@@ -1564,6 +1635,7 @@ class DesktopApp(tk.Tk):
             "pa_match_col": "J",
             "pa_write_library": True,
             "pa_library_write_col": "B",
+            "pa_library_start_row": "2",
             "pa_target_url": "https://docs.google.com/spreadsheets/d/1xX8QLvuRDawx2qoKz08bC9ZjIp_rFNO1jHmCUCUoPEE/edit",
             "pa_output_sheet": "整合",
             "pa_output_start_row": "2",
@@ -1594,6 +1666,7 @@ class DesktopApp(tk.Tk):
             "pa_match_col": self.var_pa_match_col.get().strip(),
             "pa_write_library": self.var_pa_write_library.get(),
             "pa_library_write_col": self.var_pa_library_write_col.get().strip(),
+            "pa_library_start_row": self.var_pa_library_start_row.get().strip(),
             "pa_target_url": self.var_pa_target_url.get().strip(),
             "pa_output_sheet": self.var_pa_output_sheet.get().strip(),
             "pa_output_start_row": self.var_pa_out_start.get().strip(),
@@ -1624,6 +1697,7 @@ class DesktopApp(tk.Tk):
         self._set_str(self.var_pa_match_col, s.get("pa_match_col"), "J")
         self._set_bool(self.var_pa_write_library, s.get("pa_write_library"), True)
         self._set_str(self.var_pa_library_write_col, s.get("pa_library_write_col"), "B")
+        self._set_str(self.var_pa_library_start_row, s.get("pa_library_start_row"), "2")
         self._set_str(self.var_pa_target_url, s.get("pa_target_url"), defaults["pa_target_url"])
         self._set_str(self.var_pa_output_sheet, s.get("pa_output_sheet"), "整合")
         self._set_str(self.var_pa_out_start, s.get("pa_output_start_row"), "2")
@@ -1694,11 +1768,13 @@ class DesktopApp(tk.Tk):
         g2 = self._row3(c4)
         self.var_pa_match_col = tk.StringVar(value="J")
         self.var_pa_library_write_col = tk.StringVar(value="B")
+        self.var_pa_library_start_row = tk.StringVar(value="2")
         self._cell(g2, 0, "订阅表用来对照的列", self.var_pa_match_col)
         self._cell(g2, 1, "写入贴文库哪一列", self.var_pa_library_write_col)
+        self._cell(g2, 2, "新链接插入起始行", self.var_pa_library_start_row)
         self.var_pa_write_library = tk.BooleanVar(value=True)
-        self._check(c4, "同时把订阅表新链接写入贴文库（按查找列排重，已有的跳过，新的从第 2 行插入）", self.var_pa_write_library)
-        self._note(c4, "整合表流程不变。默认用订阅表 J 列对照贴文库 B 列：已有的跳过，新链接从第 2 行插入，原有数据往下移。")
+        self._check(c4, "同时把订阅表新链接写入贴文库（按查找列排重，已有的跳过）", self.var_pa_write_library)
+        self._note(c4, "整合表流程不变。默认用订阅表 J 列对照贴文库 B 列；新链接从上面设置的起始行插入，原有数据往下移。")
 
         c5 = self._card(p, "5. 写入目标表")
         self.var_pa_target_url = tk.StringVar()
@@ -1995,13 +2071,39 @@ class DesktopApp(tk.Tk):
         ttk.Combobox(
             mode_box,
             textvariable=self.var_vd_count_mode,
-            values=("汇总总秒数 ÷ 30", "逐条视频按30秒计数"),
+            values=("汇总总秒数 ÷ 30", "逐条视频按30秒计数", "按时长区间统计数量"),
             state="readonly",
         ).pack(fill="x", pady=(3, 0), ipady=4)
         box = tk.Frame(self.vd_video_opts, bg=C["card"])
         box.grid(row=0, column=2, sticky="ew", padx=8)
         tk.Label(box, text=" ", bg=C["card"]).pack()
         self._check(box, "写入表头", self.var_vd_include_headers)
+
+        self.vd_duration_rule_wrap = tk.Frame(c3, bg=C["card"])
+        self.vd_duration_rule_wrap.pack(fill="x", pady=(8, 0))
+        tk.Label(
+            self.vd_duration_rule_wrap,
+            text="按时长区间统计数量：每条原视频只进入一个区间；按通过类型筛选的全部视频计数，不使用“计入总计数/逐条计数”勾选。下限表示“大于”，上限表示“不超过”；留空表示不限。",
+            bg=C["card"],
+            fg=C["muted"],
+            font=FS,
+            wraplength=820,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 4))
+        rule_head = tk.Frame(self.vd_duration_rule_wrap, bg="#ecfdf5")
+        rule_head.pack(fill="x", pady=(0, 2))
+        tk.Label(rule_head, text="显示名称", bg="#ecfdf5", fg=C["muted"], font=FS, anchor="w").pack(side="left", fill="x", expand=True, padx=6, pady=3)
+        tk.Label(rule_head, text="大于（秒）", bg="#ecfdf5", fg=C["muted"], font=FS, width=14).pack(side="left")
+        tk.Label(rule_head, text="不超过（秒）", bg="#ecfdf5", fg=C["muted"], font=FS, width=14).pack(side="left")
+        tk.Label(rule_head, text="", bg="#ecfdf5", width=8).pack(side="left")
+        self.vd_duration_rule_box = tk.Frame(self.vd_duration_rule_wrap, bg=C["card"])
+        self.vd_duration_rule_box.pack(fill="x")
+        rule_hint = tk.Frame(self.vd_duration_rule_wrap, bg=C["card"])
+        rule_hint.pack(fill="x", pady=4)
+        self.vd_duration_rule_count = tk.Label(rule_hint, text="0 个时长区间", bg=C["card"], fg=C["muted"], font=FS)
+        self.vd_duration_rule_count.pack(side="left")
+        StyleBtn(rule_hint, "ghost", text="+ 添加时间规则", command=self._add_vd_duration_rule).pack(side="right")
+        self._set_vd_duration_rules(self._default_vd_duration_rules())
 
         self.vd_report_cat_wrap = tk.Frame(c3, bg=C["card"])
         self.vd_report_cat_wrap.pack(fill="x", pady=(8, 0))
@@ -2624,15 +2726,16 @@ class DesktopApp(tk.Tk):
                 "vd_col_type": self.var_vd_col_type.get().strip(),
                 "vd_types": self._read_vd_types(),
                 "vd_report_categories": self._read_vd_report_cats(),
+                "vd_duration_rules": self._read_vd_duration_rules(),
                 "vd_dest_url": self.var_vd_dest_url.get().strip(),
                 "vd_log_sheet": self.var_vd_log_sheet.get().strip(),
                 "vd_report_sheet": self.var_vd_report_sheet.get().strip(),
                 "vd_out_start_row": self.var_vd_out_start_row.get().strip(),
                 "vd_unit_seconds": self.var_vd_unit.get().strip(),
                 "vd_count_mode": (
-                    "per_video_ceil"
-                    if self.var_vd_count_mode.get() == "逐条视频按30秒计数"
-                    else "divide_total"
+                    {"逐条视频按30秒计数": "per_video_ceil", "按时长区间统计数量": "duration_buckets"}.get(
+                        self.var_vd_count_mode.get(), "divide_total"
+                    )
                 ),
                 "vd_include_headers": self.var_vd_include_headers.get(),
                 "vd_schedule_enabled": self.var_vd_schedule_enabled.get(),
@@ -2753,13 +2856,16 @@ class DesktopApp(tk.Tk):
             self._set_str(self.var_vd_col_type, s.get("vd_col_type"), "E")
             self._set_vd_types(s.get("vd_types") or [])
             self._set_vd_report_cats(s.get("vd_report_categories") or [])
+            self._set_vd_duration_rules(s.get("vd_duration_rules") or self._default_vd_duration_rules())
             self._set_str(self.var_vd_dest_url, s.get("vd_dest_url"))
             self._set_str(self.var_vd_log_sheet, s.get("vd_log_sheet"), "日志表")
             self._set_str(self.var_vd_report_sheet, s.get("vd_report_sheet"), "数据表")
             self._set_str(self.var_vd_out_start_row, s.get("vd_out_start_row"), "1")
             self._set_str(self.var_vd_unit, s.get("vd_unit_seconds"), "30")
             self.var_vd_count_mode.set(
-                "逐条视频按30秒计数" if s.get("vd_count_mode") == "per_video_ceil" else "汇总总秒数 ÷ 30"
+                {"per_video_ceil": "逐条视频按30秒计数", "duration_buckets": "按时长区间统计数量"}.get(
+                    s.get("vd_count_mode"), "汇总总秒数 ÷ 30"
+                )
             )
             self._set_bool(self.var_vd_include_headers, s.get("vd_include_headers"), True)
             self._set_str(self.var_vd_start, s.get("vd_start_date"))
@@ -2908,15 +3014,16 @@ class DesktopApp(tk.Tk):
             "vd_col_type": self.var_vd_col_type.get().strip(),
             "vd_types": self._read_vd_types(),
             "vd_report_categories": self._read_vd_report_cats(),
+            "vd_duration_rules": self._read_vd_duration_rules(),
             "vd_dest_url": self.var_vd_dest_url.get().strip(),
             "vd_log_sheet": self.var_vd_log_sheet.get().strip(),
             "vd_report_sheet": self.var_vd_report_sheet.get().strip(),
             "vd_out_start_row": self.var_vd_out_start_row.get().strip(),
             "vd_unit_seconds": self.var_vd_unit.get().strip(),
             "vd_count_mode": (
-                "per_video_ceil"
-                if self.var_vd_count_mode.get() == "逐条视频按30秒计数"
-                else "divide_total"
+                {"逐条视频按30秒计数": "per_video_ceil", "按时长区间统计数量": "duration_buckets"}.get(
+                    self.var_vd_count_mode.get(), "divide_total"
+                )
             ),
             "vd_include_headers": self.var_vd_include_headers.get(),
             "vd_schedule_enabled": self.var_vd_schedule_enabled.get(),
@@ -3035,6 +3142,7 @@ class DesktopApp(tk.Tk):
                     "pa_match_col": getattr(cfg, "pa_match_col", "J"),
                     "pa_write_library": getattr(cfg, "pa_write_library", True),
                     "pa_library_write_col": getattr(cfg, "pa_library_write_col", "B"),
+                    "pa_library_start_row": getattr(cfg, "pa_library_start_row", 2),
                     "pa_target_url": getattr(cfg, "pa_target_url", ""),
                     "pa_output_sheet": getattr(cfg, "pa_output_sheet", "整合"),
                     "pa_output_start_row": getattr(cfg, "pa_output_start_row", 2),
@@ -3054,15 +3162,16 @@ class DesktopApp(tk.Tk):
         if template in (None, "", "video", "custom"):
             self._set_vd_types(getattr(cfg, "vd_types", None) or [])
             self._set_vd_report_cats(getattr(cfg, "vd_report_categories", None) or [])
+            self._set_vd_duration_rules(getattr(cfg, "vd_duration_rules", None) or self._default_vd_duration_rules())
         self.var_vd_dest_url.set(getattr(cfg, "vd_dest_url", "") or "")
         self.var_vd_log_sheet.set(getattr(cfg, "vd_log_sheet", "日志表") or "日志表")
         self.var_vd_report_sheet.set(getattr(cfg, "vd_report_sheet", "数据表") or "数据表")
         self.var_vd_out_start_row.set(str(getattr(cfg, "vd_out_start_row", 1) or 1))
         self.var_vd_unit.set(str(getattr(cfg, "vd_unit_seconds", 30) or 30))
         self.var_vd_count_mode.set(
-            "逐条视频按30秒计数"
-            if getattr(cfg, "vd_count_mode", "divide_total") == "per_video_ceil"
-            else "汇总总秒数 ÷ 30"
+            {"per_video_ceil": "逐条视频按30秒计数", "duration_buckets": "按时长区间统计数量"}.get(
+                getattr(cfg, "vd_count_mode", "divide_total"), "汇总总秒数 ÷ 30"
+            )
         )
         self.var_vd_include_headers.set(bool(getattr(cfg, "vd_include_headers", True)))
         self.var_vd_start.set(getattr(cfg, "vd_start_date", "") or "")

@@ -361,6 +361,7 @@ def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
     match_col = str(getattr(cfg, "pa_match_col", "J") or "J").strip().upper() or "J"
     write_library = bool(getattr(cfg, "pa_write_library", True))
     library_write_col = str(getattr(cfg, "pa_library_write_col", "") or "").strip().upper() or lookup_key_col
+    library_start_row = max(1, int(getattr(cfg, "pa_library_start_row", 2) or 2))
     target_url = str(getattr(cfg, "pa_target_url", "") or "").strip() or list_url
     output_sheet = str(getattr(cfg, "pa_output_sheet", "") or "整合").strip() or "整合"
     out_start = max(1, int(getattr(cfg, "pa_output_start_row", 2) or 2))
@@ -409,7 +410,10 @@ def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
             lookup = build_lookup_map(lookup_rows, lookup_key_col, lookup_value_col)
             log(f"贴文库对照 {len(lookup)} 条（{lookup_key_col} 列）")
         if write_library:
-            log(f"贴文库 {lookup_key_col} 列已有 {len(existing_library_keys)} 条，新链接从第 2 行插入，原有数据下移")
+            log(
+                f"贴文库 {lookup_key_col} 列已有 {len(existing_library_keys)} 条，"
+                f"新链接从第 {library_start_row} 行插入，原有数据下移"
+            )
 
     aggregated: list[list[str]] = []
     library_candidates: list[str] = []
@@ -504,17 +508,16 @@ def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
         )
         if new_vals:
             append_rows = build_library_append_rows(new_vals, library_write_col)
-            library_start = 2
             log(
                 f"向「{getattr(lookup_ss, 'title', '')}」/「{lookup_ws.title}」"
-                f"第 {library_start} 行插入 {library_added} 条到 {library_write_col} 列（原有数据下移）"
+                f"第 {library_start_row} 行插入 {library_added} 条到 {library_write_col} 列（原有数据下移）"
             )
-            _insert_matrix(lookup_ws, library_start, append_rows, log)
+            _insert_matrix(lookup_ws, library_start_row, append_rows, log)
         else:
             log("贴文库没有新链接需要插入")
     log("======== 贴文汇总已结束 ========")
     log(f"整合表写入：{len(aggregated)} 行 × {len(headers)} 列")
-    log(f"贴文库从第 2 行插入：{library_added} 行（已有跳过 {library_skipped}）")
+    log(f"贴文库从第 {library_start_row} 行插入：{library_added} 行（已有跳过 {library_skipped}）")
     log(f"订阅表：成功 {ok_n} 个 · 失败 {fail_n} 个 · 日期外 {skipped_date} 行")
     log(f"整合表：「{target_ss.title}」/「{output_sheet}」")
     if write_library and lookup_ws is not None:

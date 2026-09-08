@@ -41,9 +41,11 @@ from video_duration import (  # noqa: E402
     _custom_buckets,
     _custom_report_matrix,
     _date_key,
+    _duration_bucket,
     _earliest_iso_date,
     _ingest_video_source_row,
     _merge_video_payload,
+    _normalize_duration_rules,
     _per_video_count,
     _report_matrix,
     _type_pattern_match,
@@ -63,6 +65,12 @@ class TemplateConfigTests(unittest.TestCase):
                 "vd_source_sheets": ["8月份", "9月份"],
                 "vd_type_filter_mode": "exclude",
                 "vd_date_filter_enabled": False,
+                "vd_count_mode": "duration_buckets",
+                "vd_duration_rules": [
+                    {"name": "短", "min_seconds": "", "max_seconds": "45"},
+                    {"name": "长", "min_seconds": "45", "max_seconds": ""},
+                ],
+                "pa_library_start_row": "7",
                 "vd_columns": [
                     {"field": "日期", "role": "date", "column": "A"},
                     {"field": "链接", "role": "link", "column": "B"},
@@ -73,6 +81,9 @@ class TemplateConfigTests(unittest.TestCase):
         )
         self.assertEqual(cfg.catalog_url_col, "c")
         self.assertEqual(cfg.catalog_sheet_col, "f")
+        self.assertEqual(cfg.pa_library_start_row, 7)
+        self.assertEqual(cfg.vd_count_mode, "duration_buckets")
+        self.assertEqual(cfg.vd_duration_rules[0]["max_seconds"], 45.0)
         self.assertEqual(cfg.roster_config_url, "https://example.com/roster")
         self.assertEqual(cfg.roster_columns[0]["role"], "team")
         self.assertEqual(cfg.align_headers, ["姓名"])
@@ -540,6 +551,55 @@ class CatalogTests(unittest.TestCase):
 
 
 class VideoReportTests(unittest.TestCase):
+    def test_duration_bucket_default_boundaries(self):
+        rules = _normalize_duration_rules(None)
+        self.assertEqual(
+            [_duration_bucket(value, rules) for value in (0, 60, 60.01, 180, 180.01, 600)],
+            ["60秒内", "60秒内", "61-180秒", "61-180秒", "181秒以上", "181秒以上"],
+        )
+
+    def test_duration_bucket_mode_counts_each_video_once(self):
+        records = [
+            {"date": "2026-08-01", "name": "甲", "sec": 30, "type": "视频"},
+            {"date": "2026-08-01", "name": "甲", "sec": 60, "type": "视频"},
+            {"date": "2026-08-01", "name": "甲", "sec": 61, "type": "视频"},
+            {"date": "2026-08-02", "name": "甲", "sec": 180, "type": "视频"},
+            {"date": "2026-08-02", "name": "甲", "sec": 181, "type": "视频"},
+        ]
+        _names, rows = _report_matrix(
+            records,
+            None,
+            None,
+            30,
+            "全部",
+            count_mode="duration_buckets",
+        )
+        self.assertEqual(rows[2][1:4], ["60秒内", "61-180秒", "181秒以上"])
+        self.assertEqual(rows[3][1:4], [2, 2, 1])
+        self.assertEqual(rows[4][1:4], [2, 1, 0])
+        self.assertEqual(rows[5][1:4], [0, 1, 1])
+
+    def test_custom_duration_rules_change_output_columns(self):
+        records = [
+            {"date": "2026-08-01", "name": "甲", "sec": 45, "type": "视频"},
+            {"date": "2026-08-01", "name": "甲", "sec": 46, "type": "视频"},
+        ]
+        rules = [
+            {"name": "短片", "min_seconds": None, "max_seconds": 45},
+            {"name": "长片", "min_seconds": 45, "max_seconds": None},
+        ]
+        _names, rows = _report_matrix(
+            records,
+            None,
+            None,
+            30,
+            "全部",
+            count_mode="duration_buckets",
+            duration_rules=rules,
+        )
+        self.assertEqual(rows[2][1:3], ["短片", "长片"])
+        self.assertEqual(rows[3][1:3], [1, 1])
+
     def test_video_report_two_or_three_columns(self):
         records = [
             {"name": "甲", "type": "wsp 9:16", "date": "2026-08-01", "sec": 30},

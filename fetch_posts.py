@@ -330,7 +330,15 @@ class Config:
     vd_out_start_row: int = 1
     vd_include_headers: bool = True
     vd_unit_seconds: int = 30
-    vd_count_mode: str = "divide_total"  # divide_total | per_video_ceil
+    vd_count_mode: str = "divide_total"  # divide_total | per_video_ceil | duration_buckets
+    # 时长分档采用“大于 min_seconds 且不超过 max_seconds”；空边界表示不限制。
+    vd_duration_rules: list[dict] = field(
+        default_factory=lambda: [
+            {"name": "60秒内", "min_seconds": None, "max_seconds": 60},
+            {"name": "61-180秒", "min_seconds": 60, "max_seconds": 180},
+            {"name": "181秒以上", "min_seconds": 180, "max_seconds": None},
+        ]
+    )
     vd_start_date: str = ""
     vd_end_date: str = ""
     vd_batch_size: int = 100
@@ -379,6 +387,7 @@ class Config:
     pa_match_col: str = "J"
     pa_write_library: bool = True
     pa_library_write_col: str = "B"
+    pa_library_start_row: int = 2
     pa_target_url: str = ""
     pa_output_sheet: str = "整合"
     pa_output_start_row: int = 2

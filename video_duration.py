@@ -329,6 +329,55 @@ def _per_video_count(seconds: float) -> int:
     return 2 + int((value - 60) // 30)
 
 
+DEFAULT_DURATION_RULES = [
+    {"name": "60秒内", "min_seconds": None, "max_seconds": 60.0},
+    {"name": "61-180秒", "min_seconds": 60.0, "max_seconds": 180.0},
+    {"name": "181秒以上", "min_seconds": 180.0, "max_seconds": None},
+]
+
+
+def _normalize_duration_rules(items) -> list[dict[str, Any]]:
+    """Return unique, usable rules. Lower bound is exclusive; upper bound is inclusive."""
+    rules: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name or name in seen:
+            continue
+
+        def _bound(key: str) -> float | None:
+            raw = item.get(key)
+            if raw in (None, ""):
+                return None
+            try:
+                return max(0.0, float(raw))
+            except (TypeError, ValueError):
+                return None
+
+        lower = _bound("min_seconds")
+        upper = _bound("max_seconds")
+        if lower is not None and upper is not None and lower >= upper:
+            continue
+        seen.add(name)
+        rules.append({"name": name, "min_seconds": lower, "max_seconds": upper})
+    return rules or [dict(item) for item in DEFAULT_DURATION_RULES]
+
+
+def _duration_bucket(seconds: float, rules) -> str:
+    value = max(0.0, float(seconds))
+    for rule in _normalize_duration_rules(rules):
+        lower = rule.get("min_seconds")
+        upper = rule.get("max_seconds")
+        if lower is not None and value <= float(lower):
+            continue
+        if upper is not None and value > float(upper):
+            continue
+        return str(rule["name"])
+    return ""
+
+
 def drive_file_id(url: str) -> str:
     text = url or ""
     m = DRIVE_ID_RE.search(text) or DRIVE_ID_BARE_RE.search(text)
@@ -825,9 +874,12 @@ def _report_matrix(
     count_mode: str = "divide_total",
     lock_names: bool = False,
     type_rules: list[dict[str, Any]] | None = None,
+    duration_rules: list[dict[str, Any]] | None = None,
 ) -> tuple[list[str], list[list[Any]]]:
-    """每人固定两列（总计数=秒÷除数，逐条计数），后面每加一个分类多一列（按视频个数）。"""
+    """按人和日期生成时长汇总；分档模式下每条视频只给一个区间加 1。"""
     extra = [_norm_type(value) for value in (types or []) if _norm_type(value)]
+    bucket_rules = _normalize_duration_rules(duration_rules) if count_mode == "duration_buckets" else []
+    base_labels = [str(item["name"]) for item in bucket_rules] if bucket_rules else ["总计数", "逐条计数"]
     rules = {
         _norm_type(item.get("name")): (bool(item.get("in_total", True)), bool(item.get("in_item", True)))
         for item in (type_rules or [])
@@ -851,6 +903,8 @@ def _report_matrix(
     item_daily: dict[tuple[Any, str], int] = defaultdict(int)
     cat_item: dict[tuple[str, str], int] = defaultdict(int)
     cat_daily: dict[tuple[Any, str, str], int] = defaultdict(int)
+    bucket_totals: dict[tuple[str, str], int] = defaultdict(int)
+    bucket_daily: dict[tuple[Any, str, str], int] = defaultdict(int)
     dates: set[Any] = set()
     for rec in records:
         if not _in_date_range(rec.get("date"), start_d, end_d):
@@ -866,13 +920,19 @@ def _report_matrix(
         sec = rec.get("sec")
         if sec is not None:
             value = float(sec)
-            if in_total:
-                totals[name] += value
-                daily[(day, name)] += value
-            if in_item:
-                item_count = _per_video_count(value)
-                item_totals[name] += item_count
-                item_daily[(day, name)] += item_count
+            if bucket_rules:
+                bucket = _duration_bucket(value, bucket_rules)
+                if bucket:
+                    bucket_totals[(name, bucket)] += 1
+                    bucket_daily[(day, name, bucket)] += 1
+            else:
+                if in_total:
+                    totals[name] += value
+                    daily[(day, name)] += value
+                if in_item:
+                    item_count = _per_video_count(value)
+                    item_totals[name] += item_count
+                    item_daily[(day, name)] += item_count
         # Extra category columns always count videos (5 videos → 5), never duration/30s.
         for pattern in extra:
             if _type_equals(typ, pattern):
@@ -888,25 +948,36 @@ def _report_matrix(
             seen.add(name)
             names.append(name)
     if not lock_names or not names:
-        discovered = set(totals) | set(item_totals) | {name for name, _pattern in cat_item}
+        discovered = (
+            set(totals)
+            | set(item_totals)
+            | {name for name, _label in bucket_totals}
+            | {name for name, _pattern in cat_item}
+        )
         names.extend(
             sorted(
                 (name for name in discovered if name not in seen),
                 key=lambda value: value.casefold(),
             )
         )
-    block = 2 + len(extra)
+    block = len(base_labels) + len(extra)
     width = 1 + len(names) * block
-    stat_labels = ["总计数", "逐条计数"] + extra
+    stat_labels = base_labels + extra
 
     def _person_summary(name: str) -> list[Any]:
-        cells: list[Any] = [_qty_total(totals[name], unit), item_totals[name]]
+        if bucket_rules:
+            cells: list[Any] = [bucket_totals[(name, label)] for label in base_labels]
+        else:
+            cells = [_qty_total(totals[name], unit), item_totals[name]]
         cells.extend(cat_item[(name, pattern)] for pattern in extra)
         return cells
 
     def _person_day(day, name: str) -> list[Any]:
-        total = daily.get((day, name), 0.0)
-        cells: list[Any] = [_qty_total(total, unit), item_daily.get((day, name), 0)]
+        if bucket_rules:
+            cells: list[Any] = [bucket_daily.get((day, name, label), 0) for label in base_labels]
+        else:
+            total = daily.get((day, name), 0.0)
+            cells = [_qty_total(total, unit), item_daily.get((day, name), 0)]
         cells.extend(cat_daily.get((day, name, pattern), 0) for pattern in extra)
         return cells
 
@@ -929,12 +1000,12 @@ def _report_matrix(
     return names, rows
 
 
-def _format_report_sheet(ws, start_row: int, names: list[str], extra_types: list[str], payload_len: int, log: LogFn) -> None:
-    """每人一块颜色：姓名合并，总计数+逐条+分类列，人与人之间分隔线。"""
+def _format_report_sheet(ws, start_row: int, names: list[str], stat_labels: list[str], payload_len: int, log: LogFn) -> None:
+    """每人一块颜色：姓名合并，统计列按当前模式显示，人与人之间分隔线。"""
     if not names:
         return
     sheet_id = ws.id
-    block = 2 + len(extra_types)
+    block = len(stat_labels)
     width = 1 + len(names) * block
     name_row = start_row + 1
     last_row = start_row - 1 + max(payload_len, 4)
@@ -998,12 +1069,9 @@ def _format_report_sheet(ws, start_row: int, names: list[str], extra_types: list
     ]
     for col in range(1, width):
         offset = (col - 1) % max(block, 1)
-        if offset < 2:
-            pixels = 58
-        else:
-            label = extra_types[offset - 2] if offset - 2 < len(extra_types) else ""
-            chars = min(max(len(label) or 2, 2), 4)
-            pixels = 28 + chars * 16
+        label = stat_labels[offset] if offset < len(stat_labels) else ""
+        chars = min(max(len(label) or 2, 2), 6)
+        pixels = max(58, 24 + chars * 14)
         requests.append(
             {
                 "updateDimensionProperties": {
@@ -1175,12 +1243,17 @@ def _parse_existing_video_report(ws, out_start: int) -> dict[str, Any] | None:
     return {"names": names, "labels": labels, "dates": dates, "daily": daily}
 
 
-def _merge_video_payload(payload: list[list[Any]], existing: dict[str, Any] | None, extra: list[str]) -> list[list[Any]]:
+def _merge_video_payload(
+    payload: list[list[Any]],
+    existing: dict[str, Any] | None,
+    extra: list[str],
+    base_labels: list[str] | None = None,
+) -> list[list[Any]]:
     """Keep historical date rows from the current sheet when the log rebuild omits them."""
     if not existing or not payload or len(payload) < 4:
         return payload
-    block = 2 + len(extra)
-    labels = ["总计数", "逐条计数"] + extra
+    labels = list(base_labels or ["总计数", "逐条计数"]) + extra
+    block = len(labels)
     name_row = payload[1]
     names: list[str] = []
     index = 1
@@ -1232,7 +1305,21 @@ def _merge_video_payload(payload: list[list[Any]], existing: dict[str, Any] | No
     return [range_row[:width], ["日期"] + name_cells, ["统计项"] + stat_cells, ["本月汇总"] + summary, *date_rows]
 
 
-def _write_report_sheet(ws, out_start: int, include_headers: bool, range_label: str, unit: int, records, start_d, end_d, log: LogFn, types: list[str] | None = None, count_mode: str = "divide_total", type_rules: list[dict[str, Any]] | None = None) -> int:
+def _write_report_sheet(
+    ws,
+    out_start: int,
+    include_headers: bool,
+    range_label: str,
+    unit: int,
+    records,
+    start_d,
+    end_d,
+    log: LogFn,
+    types: list[str] | None = None,
+    count_mode: str = "divide_total",
+    type_rules: list[dict[str, Any]] | None = None,
+    duration_rules: list[dict[str, Any]] | None = None,
+) -> int:
     existing_names: list[str] = []
     try:
         current_header = ws.row_values(out_start + 1)
@@ -1241,16 +1328,24 @@ def _write_report_sheet(ws, out_start: int, include_headers: bool, range_label: 
     except Exception as exc:
         log(f"读取现有姓名顺序失败，将按首次生成处理：{exc}")
     extra = [_norm_type(value) for value in (types or []) if _norm_type(value)]
+    normalized_duration_rules = _normalize_duration_rules(duration_rules)
+    base_labels = (
+        [str(item["name"]) for item in normalized_duration_rules]
+        if count_mode == "duration_buckets"
+        else ["总计数", "逐条计数"]
+    )
     previous = _parse_existing_video_report(ws, out_start)
     header_locked = False
     if previous and previous.get("names"):
         existing_names = [str(name).strip() for name in previous.get("names") or [] if str(name).strip()]
         header_labels = [str(label).strip() for label in previous.get("labels") or []]
-        if len(header_labels) >= 2:
-            extra = [_norm_type(label) for label in header_labels[2:] if _norm_type(label)]
-        header_locked = True
+        if header_labels[: len(base_labels)] == base_labels:
+            extra = [_norm_type(label) for label in header_labels[len(base_labels) :] if _norm_type(label)]
+            header_locked = True
+        else:
+            log("计数方式或时长规则已变化，将重写数据表统计表头")
         missing = sorted({_norm_name(rec.get("name")) for rec in records} - set(existing_names) - {""})
-        if missing:
+        if header_locked and missing:
             log("表头已固定，未自动加列的人：" + "、".join(missing[:12]) + ("…" if len(missing) > 12 else ""))
     # 数据表按日志全量汇总。日期筛选只影响新查询，避免每次重跑把历史日期刷掉。
     names, payload = _report_matrix(
@@ -1264,9 +1359,10 @@ def _write_report_sheet(ws, out_start: int, include_headers: bool, range_label: 
         count_mode=count_mode,
         lock_names=header_locked,
         type_rules=type_rules,
+        duration_rules=normalized_duration_rules,
     )
-    payload = _merge_video_payload(payload, previous, extra)
-    labels = ["总计数", "逐条计数"] + extra
+    payload = _merge_video_payload(payload, previous, extra, base_labels)
+    labels = base_labels + extra
     header_locked = header_locked and list(names) == list(existing_names)
     total_cols = max((len(row) for row in payload), default=1)
     end_col = index_to_col_letter(total_cols - 1)
@@ -1310,7 +1406,7 @@ def _write_report_sheet(ws, out_start: int, include_headers: bool, range_label: 
     except Exception:
         pass
     try:
-        _format_report_sheet(ws, out_start, names, extra, len(payload), log)
+        _format_report_sheet(ws, out_start, names, labels, len(payload), log)
         log("已按人分色同步到全部日期行（含新增加的日期）")
     except Exception as exc:
         log(f"设置时长数据表样式失败，数据已写入：{exc}")
@@ -1753,8 +1849,15 @@ def run_video_duration(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
     start_row = max(1, int(getattr(cfg, "vd_start_row", 2) or 2))
     unit = max(1, int(getattr(cfg, "vd_unit_seconds", 30) or 30))
     count_mode = str(getattr(cfg, "vd_count_mode", "divide_total") or "divide_total")
-    if count_mode not in ("divide_total", "per_video_ceil"):
+    if count_mode not in ("divide_total", "per_video_ceil", "duration_buckets"):
         count_mode = "divide_total"
+    duration_rules = _normalize_duration_rules(getattr(cfg, "vd_duration_rules", None))
+    if write_log and count_mode == "duration_buckets":
+        log(
+            "数据表按原视频时长分档计数："
+            + "、".join(str(item["name"]) for item in duration_rules)
+            + "（每条视频只计入一个区间）"
+        )
     include_headers = bool(getattr(cfg, "vd_include_headers", True))
     out_start = max(1, int(getattr(cfg, "vd_out_start_row", 1) or 1))
     batch_size = max(20, min(500, int(getattr(cfg, "vd_batch_size", 100) or 100)))
@@ -1995,6 +2098,7 @@ def run_video_duration(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
             report_categories,
             count_mode,
             type_rules,
+            duration_rules,
         )
         return people
 

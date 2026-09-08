@@ -372,7 +372,7 @@ def _cfg_from_payload(data: dict, base: Config | None = None) -> Config:
             cfg.credentials_files = [str(x).strip() for x in raw_cf if str(x).strip()]
         if cfg.credentials_files and not cfg.credentials_file:
             cfg.credentials_file = cfg.credentials_files[0]
-    if cfg.vd_count_mode not in ("divide_total", "per_video_ceil"):
+    if cfg.vd_count_mode not in ("divide_total", "per_video_ceil", "duration_buckets"):
         cfg.vd_count_mode = "divide_total"
     if getattr(cfg, "vd_category_mode", "") not in ("columns_plus_other", "other_only"):
         cfg.vd_category_mode = "columns_plus_other"
@@ -421,6 +421,25 @@ def _cfg_from_payload(data: dict, base: Config | None = None) -> Config:
             cfg.vd_report_categories = [ln.strip() for ln in parts if ln.strip()]
         elif isinstance(raw_rc, list):
             cfg.vd_report_categories = [str(x).strip() for x in raw_rc if str(x).strip()]
+    if "vd_duration_rules" in data and isinstance(data["vd_duration_rules"], list):
+        cleaned_rules: list[dict] = []
+        for item in data["vd_duration_rules"]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            rule = {"name": name, "min_seconds": None, "max_seconds": None}
+            for key in ("min_seconds", "max_seconds"):
+                raw = item.get(key)
+                if raw not in (None, ""):
+                    try:
+                        rule[key] = max(0.0, float(raw))
+                    except (TypeError, ValueError):
+                        pass
+            cleaned_rules.append(rule)
+        if cleaned_rules:
+            cfg.vd_duration_rules = cleaned_rules
     if "catalog_exclude_sheets" in data:
         raw_exs = data.get("catalog_exclude_sheets")
         if isinstance(raw_exs, str):
@@ -521,7 +540,7 @@ def _cfg_from_payload(data: dict, base: Config | None = None) -> Config:
     ):
         if flag in data:
             setattr(cfg, flag, bool(data[flag]))
-    for key in ("output_start_row", "hot_start_row", "align_start_row", "align_header_row", "vd_start_row", "vd_out_start_row", "catalog_start_row", "catalog_output_start_row", "roster_start_row", "roster_date_start_row", "pa_start_row", "pa_output_start_row", "pa_schedule_minutes"):
+    for key in ("output_start_row", "hot_start_row", "align_start_row", "align_header_row", "vd_start_row", "vd_out_start_row", "catalog_start_row", "catalog_output_start_row", "roster_start_row", "roster_date_start_row", "pa_start_row", "pa_library_start_row", "pa_output_start_row", "pa_schedule_minutes"):
         if key in data and str(data[key]).strip():
             try:
                 setattr(cfg, key, max(1, int(data[key])))
@@ -1084,6 +1103,7 @@ def api_config():
                 "vd_include_headers": cfg.vd_include_headers,
                 "vd_unit_seconds": cfg.vd_unit_seconds,
                 "vd_count_mode": cfg.vd_count_mode,
+                "vd_duration_rules": cfg.vd_duration_rules,
                 "vd_start_date": cfg.vd_start_date,
                 "vd_end_date": cfg.vd_end_date,
                 "vd_batch_size": cfg.vd_batch_size,
@@ -1126,6 +1146,7 @@ def api_config():
                 "pa_match_col": cfg.pa_match_col,
                 "pa_write_library": cfg.pa_write_library,
                 "pa_library_write_col": cfg.pa_library_write_col,
+                "pa_library_start_row": cfg.pa_library_start_row,
                 "pa_target_url": cfg.pa_target_url,
                 "pa_output_sheet": cfg.pa_output_sheet,
                 "pa_output_start_row": cfg.pa_output_start_row,
