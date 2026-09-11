@@ -22,6 +22,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, date, time as dt_time
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlsplit
 
 _CONFIG_WRITE_LOCK = threading.Lock()
 
@@ -67,6 +68,158 @@ WRITE_CHUNK = 4000
 RETRY_TIMES = 5
 
 LogFn = Callable[[str], None]
+
+
+@dataclass(frozen=True)
+class FacebookPostRef:
+    """Identifiers carried by a Facebook permalink.
+
+    Group permalinks contain two unrelated numbers. Keeping them separate is
+    important: removing every non-digit character would silently concatenate
+    the group id and post id into a non-existent id.
+    """
+
+    post_id: str
+    owner_id: str = ""
+    is_group: bool = False
+    canonical_url: str = ""
+
+
+def parse_facebook_post_url(value: Any) -> FacebookPostRef | None:
+    """Parse common Page and Group post URL variants without network access."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.startswith(("facebook.com/", "www.facebook.com/", "fb.com/")):
+        raw = "https://" + raw
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host not in {
+        "facebook.com", "www.facebook.com", "m.facebook.com",
+        "mbasic.facebook.com", "web.facebook.com", "fb.com", "www.fb.com",
+    }:
+        return None
+
+    parts = [part for part in parsed.path.split("/") if part]
+    lower = [part.lower() for part in parts]
+
+    # /groups/{group id}/posts/{post id} and the older /permalink/ variant.
+    if "groups" in lower:
+        pos = lower.index("groups")
+        group_id = parts[pos + 1] if pos + 1 < len(parts) else ""
+        if group_id.isdigit():
+            for marker in ("posts", "permalink"):
+                if marker in lower[pos + 2:]:
+                    marker_pos = lower.index(marker, pos + 2)
+                    post_id = parts[marker_pos + 1] if marker_pos + 1 < len(parts) else ""
+                    if post_id.isdigit():
+                        return FacebookPostRef(
+                            post_id=post_id,
+                            owner_id=group_id,
+                            is_group=True,
+                            canonical_url=f"https://www.facebook.com/groups/{group_id}/posts/{post_id}",
+                        )
+
+    query = parse_qs(parsed.query)
+    post_id = next(iter(query.get("story_fbid") or query.get("fbid") or []), "")
+    owner_id = next(iter(query.get("id") or []), "")
+    if post_id.isdigit():
+        owner_id = owner_id if owner_id.isdigit() else ""
+        canonical = (
+            f"https://www.facebook.com/{owner_id}_{post_id}"
+            if owner_id else f"https://www.facebook.com/posts/{post_id}"
+        )
+        return FacebookPostRef(post_id, owner_id, False, canonical)
+
+    # fb.com/{page id}_{post id}
+    if parts:
+        combined = re.fullmatch(r"(\d+)_(\d+)", parts[0])
+        if combined:
+            owner_id, post_id = combined.groups()
+            return FacebookPostRef(
+                post_id, owner_id, False,
+                f"https://www.facebook.com/{owner_id}_{post_id}",
+            )
+
+    # /{page id}/posts/{post id}, /reel/{id}, /videos/{id}
+    for marker in ("posts", "reel", "videos"):
+        if marker in lower:
+            marker_pos = lower.index(marker)
+            post_id = parts[marker_pos + 1] if marker_pos + 1 < len(parts) else ""
+            if post_id.isdigit():
+                owner_id = parts[marker_pos - 1] if marker_pos > 0 else ""
+                owner_id = owner_id if owner_id.isdigit() else ""
+                canonical = (
+                    f"https://www.facebook.com/{owner_id}/posts/{post_id}"
+                    if owner_id else f"https://www.facebook.com/{marker}/{post_id}"
+                )
+                return FacebookPostRef(post_id, owner_id, False, canonical)
+    return None
+
+
+def _identity_field_key(value: Any) -> str:
+    return re.sub(r"[\s_\-－—]+", "", str(value or "").strip().lower())
+
+
+def backfill_facebook_identity(
+    rows: list[list[Any]], fields: list[Any], log: LogFn = print
+) -> int:
+    """Fill blank post/owner ids from a Facebook permalink already in the row.
+
+    Content, dates, and engagement require an authenticated exporter/API and
+    are deliberately not fabricated here.
+    """
+    names = [_identity_field_key(getattr(field, "name", "")) for field in fields]
+    post_indexes = [
+        i for i, name in enumerate(names)
+        if name in {"帖文id", "贴文id", "帖子id", "postid"}
+    ]
+    owner_indexes = [
+        i for i, name in enumerate(names)
+        if any(token in name for token in ("专页id", "主页id", "群组id", "小组id"))
+    ]
+    canonical_link_indexes = [
+        i for i, name in enumerate(names)
+        if name in {
+            "贴文链接", "帖文链接", "帖子链接", "fblink", "fb链接", "facebook链接"
+        }
+    ]
+    link_indexes = [
+        i for i, name in enumerate(names)
+        if any(token in name for token in ("链接", "link", "url"))
+    ]
+    scan_indexes = link_indexes + [i for i in range(len(fields)) if i not in link_indexes]
+    changed = 0
+    for row in rows:
+        ref = None
+        for index in scan_indexes:
+            if index < len(row):
+                ref = parse_facebook_post_url(row[index])
+                if ref:
+                    break
+        if not ref:
+            continue
+        row_changed = False
+        for index in post_indexes:
+            if index < len(row) and not str(row[index] or "").strip():
+                row[index] = ref.post_id
+                row_changed = True
+        for index in owner_indexes:
+            if index < len(row) and not str(row[index] or "").strip() and ref.owner_id:
+                row[index] = ref.owner_id
+                row_changed = True
+        for index in canonical_link_indexes:
+            if index < len(row) and not str(row[index] or "").strip():
+                row[index] = ref.canonical_url
+                row_changed = True
+        if row_changed:
+            changed += 1
+    if changed:
+        log(f"  Facebook 链接回填：已从原始链接补齐 {changed} 行贴文/群组 ID 或标准链接")
+    return changed
 
 
 def is_transient_error(err: Exception) -> bool:
@@ -1304,7 +1457,9 @@ def build_datasource_from_ss(
 
     if not aligned or max_len == 0:
         return []
-    return [list(row) for row in zip(*aligned)]
+    rows = [list(row) for row in zip(*aligned)]
+    backfill_facebook_identity(rows, fields, log=log)
+    return rows
 
 
 def filter_and_sort(
