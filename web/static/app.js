@@ -10,7 +10,7 @@ const templateNames = {
 
 const scalarFields = {
   filter: ["credentials_file", "target_url", "hot_target_url", "output_sheet", "hot_output_sheet", "output_start_row", "hot_start_row", "start_date", "end_date", "likes_threshold", "schedule_minutes", "exclude_id_value", "date_field", "sort_field", "cf_publish_url", "cf_publish_secret", "cf_publish_source"],
-  catalog: ["catalog_index_url", "catalog_index_sheet", "catalog_start_row", "catalog_url_col", "catalog_sheet_col", "catalog_target_url", "catalog_output_sheet", "catalog_output_start_row", "catalog_exclude_sheets", "catalog_date_col", "catalog_start_date", "catalog_end_date"],
+  catalog: ["catalog_index_url", "catalog_index_sheet", "catalog_start_row", "catalog_url_col", "catalog_sheet_col", "catalog_target_url", "catalog_output_sheet", "catalog_output_start_row", "catalog_dedupe_col", "catalog_exclude_sheets", "catalog_date_col", "catalog_start_date", "catalog_end_date"],
   align: ["align_target_url", "align_output_sheet", "align_start_row", "align_source_sheet", "align_header_row", "align_schedule_minutes"],
   video: ["vd_source_url", "vd_source_sheets", "vd_start_row", "vd_col_date", "vd_col_link", "vd_col_name", "vd_col_type", "vd_types", "vd_start_date", "vd_end_date", "vd_type_filter_mode", "vd_dest_url", "vd_report_sheet", "vd_log_sheet", "vd_out_start_row", "vd_count_mode", "vd_unit_seconds", "vd_batch_size", "vd_schedule_minutes"],
   custom: ["vd_source_url", "vd_source_sheets", "vd_start_row", "vd_col_date", "vd_col_link", "vd_col_name", "vd_col_type", "vd_types", "vd_start_date", "vd_end_date", "vd_type_filter_mode", "vd_dest_url", "vd_report_sheet", "vd_log_sheet", "vd_out_start_row", "vd_count_mode", "vd_unit_seconds", "vd_batch_size", "vd_schedule_minutes"],

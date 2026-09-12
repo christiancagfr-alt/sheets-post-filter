@@ -507,8 +507,10 @@ class Config:
     catalog_url_col: str = "B"
     catalog_sheet_col: str = "D"
     catalog_target_url: str = ""
+    catalog_target_urls: list[str] = field(default_factory=list)
     catalog_output_sheet: str = "目录汇总"
     catalog_output_start_row: int = 1
+    catalog_dedupe_col: str = ""
     catalog_keep_each_header: bool = False
     catalog_add_source: bool = True
     catalog_skip_existing: bool = True

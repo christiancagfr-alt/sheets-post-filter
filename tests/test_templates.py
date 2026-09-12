@@ -16,6 +16,8 @@ from catalog_merge import (  # noqa: E402
     _col_index,
     _combine_catalog_link,
     _detect_date_index,
+    _detect_phone_index,
+    _dedupe_key,
     _filter_chunk_by_date,
     _find_ws,
     _get_or_create_sheet,
@@ -985,6 +987,95 @@ class VideoReportTests(unittest.TestCase):
         self.assertEqual(n1, 0)
         self.assertEqual(n2, 1)
         self.assertEqual(second, [["1626-小瑞", "456"]])
+
+        self.assertEqual(_detect_phone_index(["来源", "姓名", "电话号码"]), 2)
+        self.assertEqual(
+            _dedupe_key(["甲", "+244 923-000-111"], 1),
+            _dedupe_key(["乙", "00244 923 000 111"], 1),
+        )
+
+    def test_catalog_multiple_targets_share_one_phone_dedupe_set(self):
+        index_ws = SimpleNamespace(title="目录", id=11)
+        wanted_ws = SimpleNamespace(title="1751-小源", id=995133928)
+        index_ss = SimpleNamespace(title="专页目录", id="index", worksheets=lambda: [index_ws, wanted_ws])
+        targets = {
+            "target-1": SimpleNamespace(title="备份1", id="target-1"),
+            "target-2": SimpleNamespace(title="备份2", id="target-2"),
+        }
+        cfg = app.Config(
+            catalog_index_url="index-url",
+            catalog_target_url="target-1; target-2",
+            catalog_index_sheet="目录",
+            catalog_url_col="B",
+            catalog_sheet_col="D",
+            catalog_start_row=2,
+            catalog_date_filter_enabled=False,
+            catalog_dedupe_col="C",
+        )
+        cfg.resolve_credentials = lambda: ROOT / "config.example.json"
+
+        def fake_open(_gc, value, log=print):
+            if value == "index-url":
+                return index_ss
+            return targets[value]
+
+        def fake_read(ws, log=print):
+            if ws is index_ws:
+                return [["", "", "", ""], ["", '=HYPERLINK("#gid=995133928","1751-小源")', "", ""]]
+            return []
+
+        def fake_batches(ws, log, cancelled=None):
+            if ws is wanted_ws:
+                yield [
+                    ["日期", "电话号码"],
+                    ["2026-09-01", "+244 111"],
+                    ["2026-09-01", "00244 222"],
+                    ["2026-09-01", "244 333"],
+                    ["2026-09-01", "244-444"],
+                ]
+
+        captured = {}
+
+        class FakeWriter:
+            def __init__(self, ss, sheet_name, start_row, log):
+                self.ss = ss
+                self.buffer = []
+                self.total = 0
+                self.existing_rows = 2
+                self.dedupe_index = 2
+                self.append = False
+                self.width = 3
+                captured[ss.id] = self
+
+            def load_existing(self, key_index=-1):
+                phone = "111" if self.ss.id == "target-1" else "222"
+                return {("phone", "244" + phone)}
+
+            def add_rows(self, rows):
+                self.buffer.extend(rows)
+
+            def finish(self):
+                self.total = len(self.buffer)
+                return self.total
+
+        with (
+            patch("catalog_merge.authorize_cfg", return_value=object()),
+            patch("catalog_merge.open_by_url_or_id", side_effect=fake_open),
+            patch("catalog_merge.pick_source_ws", return_value=index_ws),
+            patch("catalog_merge.read_sheet_values", side_effect=fake_read),
+            patch("catalog_merge._read_source_batches", side_effect=fake_batches),
+            patch("catalog_merge._read_link_column", return_value=["#gid=995133928"]),
+            patch("catalog_merge._StreamingWriter", FakeWriter),
+        ):
+            result = run_catalog_merge(cfg, log=lambda _message: None)
+
+        written = captured["target-1"].buffer + captured["target-2"].buffer
+        self.assertEqual(len(written), 2)
+        self.assertEqual({row[2] for row in written}, {"244 333", "244-444"})
+        self.assertEqual(len(captured["target-1"].buffer), 1)
+        self.assertEqual(len(captured["target-2"].buffer), 1)
+        self.assertEqual(result["total_rows"], 2)
+        self.assertEqual(len(result["targets"]), 2)
 
     def test_catalog_merge_skips_out_of_range_dates(self):
         index_ws = SimpleNamespace(title="目录", id=11)

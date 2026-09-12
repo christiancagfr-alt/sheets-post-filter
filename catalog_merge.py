@@ -220,6 +220,7 @@ def _attach_source_column(rows: list[list[Any]], source_name: str, header_in_fir
 
 
 DATE_HEADER_RE = re.compile(r"日期|时间|date|time", re.I)
+PHONE_HEADER_RE = re.compile(r"电话|手机|手机号|号码|whats?app|phone|mobile|tel", re.I)
 
 
 def _row_fingerprint(row: list[Any] | None) -> tuple[str, ...]:
@@ -227,6 +228,32 @@ def _row_fingerprint(row: list[Any] | None) -> tuple[str, ...]:
     while cells and not cells[-1]:
         cells.pop()
     return tuple(cells)
+
+
+def _detect_phone_index(header_row: list[Any] | None) -> int:
+    for index, cell in enumerate(header_row or []):
+        if PHONE_HEADER_RE.search(str(cell or "").strip()):
+            return index
+    return -1
+
+
+def _normalize_phone(value: Any) -> str:
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    text = unicodedata.normalize("NFKC", str(value or "")).strip()
+    digits = "".join(re.findall(r"\d", text))
+    if digits.startswith("00"):
+        digits = digits[2:]
+    return digits
+
+
+def _dedupe_key(row: list[Any] | None, key_index: int = -1) -> tuple[str, ...]:
+    cells = list(row or [])
+    if key_index >= 0 and key_index < len(cells):
+        phone = _normalize_phone(cells[key_index])
+        if phone:
+            return ("phone", phone)
+    return ("row",) + _row_fingerprint(cells)
 
 
 def _as_day(value: Any):
@@ -302,13 +329,15 @@ def _log_catalog_finished(
     )
 
 
-def _take_new_rows(rows: list[list[Any]], seen: set[tuple[str, ...]]) -> tuple[list[list[Any]], int]:
+def _take_new_rows(
+    rows: list[list[Any]], seen: set[tuple[str, ...]], key_index: int = -1
+) -> tuple[list[list[Any]], int]:
     kept: list[list[Any]] = []
     skipped = 0
     for row in rows:
-        key = _row_fingerprint(row)
-        if not key:
+        if not _row_fingerprint(row):
             continue
+        key = _dedupe_key(row, key_index)
         if key in seen:
             skipped += 1
             continue
@@ -386,6 +415,7 @@ class _StreamingWriter:
         self.prepared = False
         self.append = append
         self.existing_rows = 0
+        self.dedupe_index = -1
 
     def _prepare(self) -> None:
         if self.prepared:
@@ -393,7 +423,7 @@ class _StreamingWriter:
         self.ws = _get_or_create_sheet(self.ss, self.sheet_name, self.log)
         self.prepared = True
 
-    def load_existing(self) -> set[tuple[str, ...]]:
+    def load_existing(self, key_index: int = -1) -> set[tuple[str, ...]]:
         """Read current target rows for dedupe, then append after the last used row."""
         self._prepare()
         keys: set[tuple[str, ...]] = set()
@@ -403,14 +433,18 @@ class _StreamingWriter:
             self.existing_rows = 0
             return keys
         self.log("读取目标表已有数据，已存在的行会跳过…")
+        self.dedupe_index = key_index
         for chunk in _read_source_batches(self.ws, self.log):
+            if self.dedupe_index < 0 and chunk:
+                self.dedupe_index = _detect_phone_index(chunk[0])
             for row in chunk:
-                key = _row_fingerprint(row)
-                if not key:
+                fingerprint = _row_fingerprint(row)
+                if not fingerprint:
                     continue
+                key = _dedupe_key(row, self.dedupe_index)
                 keys.add(key)
                 rows_n += 1
-                self.width = max(self.width, len(key))
+                self.width = max(self.width, len(fingerprint))
         self.existing_rows = rows_n
         self.write_row = self.start_row + rows_n
         self.log(f"目标表已有 {rows_n} 行，从第 {self.write_row} 行起追加新行")
@@ -555,14 +589,36 @@ def run_catalog_merge(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any]
     log = _safe_log(log)
     index_url = str(getattr(cfg, "catalog_index_url", "") or "").strip()
     target_url = str(getattr(cfg, "catalog_target_url", "") or "").strip()
+    raw_targets = target_url or getattr(cfg, "catalog_target_urls", None)
+    if isinstance(raw_targets, (list, tuple)):
+        target_urls = [str(item or "").strip() for item in raw_targets]
+    else:
+        target_urls = re.split(r"[\s;；]+", str(raw_targets or "").strip())
+    target_urls = [item for item in target_urls if item]
+    unique_targets: list[str] = []
+    target_ids: set[str] = set()
+    for item in target_urls:
+        sid = extract_spreadsheet_id(item) or item
+        if sid in target_ids:
+            continue
+        target_ids.add(sid)
+        unique_targets.append(item)
+    target_urls = unique_targets
     if not index_url:
         raise RuntimeError("请填写目录表链接")
-    if not target_url:
-        raise RuntimeError("请填写目标表链接")
+    if not target_urls:
+        raise RuntimeError("请至少填写一个目标表链接")
     url_col = _col_index(getattr(cfg, "catalog_url_col", "B"))
     sheet_col = _col_index(getattr(cfg, "catalog_sheet_col", "D"))
     start_row = max(1, int(getattr(cfg, "catalog_start_row", 2) or 2))
     output_start = max(1, int(getattr(cfg, "catalog_output_start_row", 1) or 1))
+    dedupe_col = str(getattr(cfg, "catalog_dedupe_col", "") or "").strip()
+    dedupe_idx = -1
+    if dedupe_col:
+        try:
+            dedupe_idx = col_letter_to_index(dedupe_col)
+        except ValueError as exc:
+            raise RuntimeError("电话号码排重列必须填列字母，例如 C；留空则自动识别") from exc
     keep_each_header = bool(getattr(cfg, "catalog_keep_each_header", False))
     add_source = bool(getattr(cfg, "catalog_add_source", True))
     skip_existing = bool(getattr(cfg, "catalog_skip_existing", True))
@@ -693,30 +749,57 @@ def run_catalog_merge(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any]
     merged_keys: set[tuple] = set()
     excluded_logged: set[str] = set()
     match_number = 0
-    target_ss = open_by_url_or_id(gc, target_url, log=log)
     output_sheet = str(getattr(cfg, "catalog_output_sheet", "目录汇总") or "目录汇总").strip()
-    writer = _StreamingWriter(target_ss, output_sheet, output_start, log)
+    writers: list[_StreamingWriter] = []
+    target_sheets: list[Any] = []
+    read_existing_targets = skip_existing or len(target_urls) > 1
     seen: set[tuple[str, ...]] = set()
     skipped_dup = 0
     skipped_date = 0
     date_idx = -1
     date_idx_ready = False
-    if skip_existing:
-        if hasattr(writer, "append"):
-            writer.append = True
-        if hasattr(writer, "load_existing"):
-            seen.update(writer.load_existing())
-            if getattr(writer, "existing_rows", 0):
-                header_written = True
-        log("已有行会跳过，只追加新行。表满了请换目标表链接，并用日期筛选接着备份。")
+    for number, item in enumerate(target_urls, 1):
+        try:
+            target_ss = open_by_url_or_id(gc, item, log=log)
+            writer = _StreamingWriter(target_ss, output_sheet, output_start, log)
+            if read_existing_targets:
+                if hasattr(writer, "append"):
+                    writer.append = True
+                if hasattr(writer, "load_existing"):
+                    try:
+                        seen.update(writer.load_existing(dedupe_idx))
+                    except TypeError:
+                        seen.update(writer.load_existing())
+                    if dedupe_idx < 0 and getattr(writer, "dedupe_index", -1) >= 0:
+                        dedupe_idx = writer.dedupe_index
+            writers.append(writer)
+            target_sheets.append(target_ss)
+            log(f"[目标 {number}/{len(target_urls)}] 「{target_ss.title}」/{output_sheet} 已加入全局排重")
+        except Exception as exc:
+            log(f"[目标 {number}/{len(target_urls)}] 无法打开，已跳过：{exc}")
+    if not writers:
+        raise RuntimeError("所有目标表链接都无法打开")
+    target_ss = target_sheets[0]
+    if read_existing_targets:
+        mode = f"按第 {dedupe_idx + 1} 列电话号码" if dedupe_idx >= 0 else "按整行"
+        log(f"已读取 {len(writers)} 个目标表并全局排重（{mode}）；已有号码不会写入任何目标表。")
     log("目录汇总按实际有数据的列写入：空列不写、空行跳过、读一批写一批（每批 1000 行）。列变多时按本轮最大列数扩展。")
     if add_source:
         log("写入时在 A 列追加来源（目录里的工作表名称）")
     if use_dates:
         log(f"日期筛选：{start_d or '…'} ~ {end_d or '…'}" + (f"，源表列 {date_col_letter.upper()}" if date_col_letter else "（日期列未填则从表头识别）"))
 
+    output_header_seeded = False
+
+    def _writer_load(writer) -> int:
+        return int(getattr(writer, "existing_rows", 0) or 0) + int(getattr(writer, "total", 0) or 0) + len(getattr(writer, "buffer", []) or [])
+
+    def _write_distributed(rows: list[list[Any]]) -> None:
+        for row in rows:
+            min(writers, key=_writer_load).add_rows([row])
+
     def _merge_ws(source_row: int, source_ss, source_ws, name_row: int, sheet_name: str) -> None:
-        nonlocal header_written, match_number, skipped_dup, skipped_date, date_idx, date_idx_ready
+        nonlocal header_written, output_header_seeded, match_number, skipped_dup, skipped_date, date_idx, date_idx_ready, dedupe_idx
         if source_ss.id == index_ss.id and getattr(source_ws, "id", None) == getattr(index_ws, "id", None):
             return
         title = source_ws.title
@@ -784,13 +867,24 @@ def run_catalog_merge(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any]
                         continue
                 if add_source:
                     chunk = _attach_source_column(chunk, source_label, header_in_chunk)
-                chunk, n_dup = _take_new_rows(chunk, seen)
+                if header_in_chunk and chunk and not output_header_seeded:
+                    header = chunk.pop(0)
+                    if dedupe_idx < 0:
+                        dedupe_idx = _detect_phone_index(header)
+                        if dedupe_idx >= 0:
+                            log(f"已从表头自动识别电话号码排重列：第 {dedupe_idx + 1} 列「{header[dedupe_idx]}」")
+                    for target_writer in writers:
+                        if _writer_load(target_writer) == 0:
+                            target_writer.add_rows([header])
+                    seen.add(_dedupe_key(header, dedupe_idx))
+                    output_header_seeded = True
+                chunk, n_dup = _take_new_rows(chunk, seen, dedupe_idx)
                 sheet_dup += n_dup
                 skipped_dup += n_dup
                 if not chunk:
                     continue
                 got_any = True
-                writer.add_rows(chunk)
+                _write_distributed(chunk)
                 item["rows"] += len(chunk)
             extra = []
             if sheet_dup:
@@ -798,7 +892,7 @@ def run_catalog_merge(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any]
             if sheet_date:
                 extra.append(f"日期外 {sheet_date}")
             extra_s = f"（{'，'.join(extra)}）" if extra else ""
-            running = int(getattr(writer, "total", 0) or 0) + len(getattr(writer, "buffer", []) or [])
+            running = sum(int(getattr(w, "total", 0) or 0) + len(getattr(w, "buffer", []) or []) for w in writers)
             if not got_any and first_batch and not sheet_dup and not sheet_date:
                 log(f"[匹配 {match_number}] 「{source_ss.title}」/「{source_ws.title}」没有有效数据，已跳过")
             else:
@@ -865,9 +959,10 @@ def run_catalog_merge(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any]
         sources.append({"row": row_number, "url": "", "sheet": sheet_name, "rows": 0, "error": error})
         log(f"D 列第 {row_number} 行「{sheet_name}」未匹配，已跳过：{error}")
 
-    total_rows = writer.finish()
-    existing_n = int(getattr(writer, "existing_rows", 0) or 0)
-    width = int(getattr(writer, "width", 1) or 1)
+    totals = [writer.finish() for writer in writers]
+    total_rows = sum(totals)
+    existing_n = sum(int(getattr(writer, "existing_rows", 0) or 0) for writer in writers)
+    width = max((int(getattr(writer, "width", 1) or 1) for writer in writers), default=1)
     ok_n = sum(1 for item in sources if not item.get("error") and item.get("rows"))
     perm_n = sum(1 for item in sources if item.get("error") and "权限" in str(item.get("error") or ""))
     miss_n = sum(1 for item in sources if item.get("error") and "找不到" in str(item.get("error") or ""))
@@ -884,7 +979,7 @@ def run_catalog_merge(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any]
         ok_n=ok_n,
         perm_n=perm_n,
         miss_n=miss_n,
-        book=getattr(target_ss, "title", "") or "",
+        book="、".join(str(getattr(ss, "title", "") or "") for ss in target_sheets),
         sheet=output_sheet,
     )
     return {
@@ -898,5 +993,15 @@ def run_catalog_merge(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any]
         "ok_sheets": ok_n,
         "sources": sources,
         "target_url": spreadsheet_url(target_ss.id),
+        "target_urls": [spreadsheet_url(ss.id) for ss in target_sheets],
+        "targets": [
+            {
+                "url": spreadsheet_url(ss.id),
+                "title": str(getattr(ss, "title", "") or ""),
+                "added": totals[index],
+                "existing": int(getattr(writers[index], "existing_rows", 0) or 0),
+            }
+            for index, ss in enumerate(target_sheets)
+        ],
         "sheet": output_sheet,
     }

@@ -333,6 +333,7 @@ def _cfg_from_payload(data: dict, base: Config | None = None) -> Config:
         "catalog_sheet_col": "catalog_sheet_col",
         "catalog_target_url": "catalog_target_url",
         "catalog_output_sheet": "catalog_output_sheet",
+        "catalog_dedupe_col": "catalog_dedupe_col",
         "catalog_date_col": "catalog_date_col",
         "catalog_start_date": "catalog_start_date",
         "catalog_end_date": "catalog_end_date",
@@ -372,6 +373,14 @@ def _cfg_from_payload(data: dict, base: Config | None = None) -> Config:
             cfg.credentials_files = [str(x).strip() for x in raw_cf if str(x).strip()]
         if cfg.credentials_files and not cfg.credentials_file:
             cfg.credentials_file = cfg.credentials_files[0]
+    if "catalog_target_urls" in data:
+        raw_targets = data.get("catalog_target_urls")
+        if isinstance(raw_targets, str):
+            cfg.catalog_target_urls = [
+                item for item in re.split(r"[\s;；]+", raw_targets.strip()) if item
+            ]
+        elif isinstance(raw_targets, list):
+            cfg.catalog_target_urls = [str(item).strip() for item in raw_targets if str(item).strip()]
     if cfg.vd_count_mode not in ("divide_total", "per_video_ceil", "duration_buckets"):
         cfg.vd_count_mode = "divide_total"
     if getattr(cfg, "vd_category_mode", "") not in ("columns_plus_other", "other_only"):
@@ -724,7 +733,13 @@ def _menu_schedule_spec(item: dict) -> dict | None:
             enabled = bool(settings.get("catalog_schedule_enabled"))
             minutes = int(settings.get("catalog_schedule_minutes") or 180)
             only = False
-            if not str(settings.get("catalog_index_url") or "").strip() or not str(settings.get("catalog_target_url") or "").strip():
+            if (
+                not str(settings.get("catalog_index_url") or "").strip()
+                or not (
+                    str(settings.get("catalog_target_url") or "").strip()
+                    or settings.get("catalog_target_urls")
+                )
+            ):
                 enabled = False
     except (TypeError, ValueError):
         return None
@@ -1117,8 +1132,10 @@ def api_config():
                 "catalog_url_col": cfg.catalog_url_col,
                 "catalog_sheet_col": cfg.catalog_sheet_col,
                 "catalog_target_url": cfg.catalog_target_url,
+                "catalog_target_urls": cfg.catalog_target_urls,
                 "catalog_output_sheet": cfg.catalog_output_sheet,
                 "catalog_output_start_row": cfg.catalog_output_start_row,
+                "catalog_dedupe_col": cfg.catalog_dedupe_col,
                 "catalog_keep_each_header": cfg.catalog_keep_each_header,
                 "catalog_add_source": cfg.catalog_add_source,
                 "catalog_skip_existing": cfg.catalog_skip_existing,
@@ -1293,7 +1310,7 @@ def _run_catalog_job(cfg: Config, job_key: str = "default") -> None:
 def start_catalog_job(cfg: Config) -> str | None:
     if not cfg.catalog_index_url:
         return "请填写目录表链接"
-    if not cfg.catalog_target_url:
+    if not cfg.catalog_target_url and not cfg.catalog_target_urls:
         return "请填写目标表链接"
     save_config(cfg)
     return enqueue_job("catalog", cfg)

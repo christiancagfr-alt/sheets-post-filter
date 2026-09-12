@@ -1514,7 +1514,7 @@ class DesktopApp(tk.Tk):
         self.var_catalog_add_source = tk.BooleanVar(value=True)
         self._check(c1, "写入时在 A 列追加来源（用目录里的工作表名称，例如 1751-小源）", self.var_catalog_add_source)
         self.var_catalog_skip_existing = tk.BooleanVar(value=True)
-        self._check(c1, "已有的行跳过，只追加新行（不整表重写）", self.var_catalog_skip_existing)
+        self._check(c1, "已有的行跳过，只追加新行（多个目标表之间也全局排重）", self.var_catalog_skip_existing)
         tk.Label(
             c1,
             text="排除这些工作表名称（不汇总。精确匹配；可用 * 通配符，例如 导航 或 1751*）",
@@ -1537,14 +1537,16 @@ class DesktopApp(tk.Tk):
         self.var_catalog_target_url = tk.StringVar()
         self.var_catalog_output_sheet = tk.StringVar(value="目录汇总")
         self.var_catalog_output_start_row = tk.StringVar(value="1")
-        self._entry(c2, "目标表格链接", self.var_catalog_target_url)
+        self._entry(c2, "目标表格链接（多个链接用空格或分号分开）", self.var_catalog_target_url)
         g = self._row3(c2)
         self._cell(g, 0, "工作表名", self.var_catalog_output_sheet)
         self._cell(g, 1, "写入起始行", self.var_catalog_output_start_row)
+        self.var_catalog_dedupe_col = tk.StringVar()
+        self._cell(g, 2, "电话号码排重列", self.var_catalog_dedupe_col)
         self._note(
             c2,
-            "默认只追加还没有的行：目标表里已经有的跳过。一张表接近 1000 万格时，换一个新的目标表链接，"
-            "再用下面的日期筛选接着备份，就能把数据跑全。"
+            "可以填写多个目标表链接，程序会先读取全部目标表并全局排重，再把新增行均衡分配写入。"
+            "电话号码排重列填写写入结果中的列字母（例如 C）；留空会从表头自动识别电话/手机/号码列。"
             "勾选「追加来源」后，A 列写入目录里的工作表名称，原来的列整体右移。",
         )
 
@@ -2680,6 +2682,7 @@ class DesktopApp(tk.Tk):
                 "catalog_target_url": self.var_catalog_target_url.get().strip(),
                 "catalog_output_sheet": self.var_catalog_output_sheet.get().strip(),
                 "catalog_output_start_row": self.var_catalog_output_start_row.get().strip(),
+                "catalog_dedupe_col": self.var_catalog_dedupe_col.get().strip(),
                 "catalog_keep_each_header": self.var_catalog_keep_header.get(),
                 "catalog_add_source": self.var_catalog_add_source.get(),
                 "catalog_skip_existing": self.var_catalog_skip_existing.get(),
@@ -2810,6 +2813,7 @@ class DesktopApp(tk.Tk):
             self._set_str(self.var_catalog_target_url, s.get("catalog_target_url"))
             self._set_str(self.var_catalog_output_sheet, s.get("catalog_output_sheet"), "目录汇总")
             self._set_str(self.var_catalog_output_start_row, s.get("catalog_output_start_row"), "1")
+            self._set_str(self.var_catalog_dedupe_col, s.get("catalog_dedupe_col"))
             self._set_bool(self.var_catalog_keep_header, s.get("catalog_keep_each_header"))
             self._set_bool(self.var_catalog_add_source, s.get("catalog_add_source"), True)
             self._set_bool(self.var_catalog_skip_existing, s.get("catalog_skip_existing"), True)
@@ -2981,6 +2985,7 @@ class DesktopApp(tk.Tk):
             "catalog_target_url": self.var_catalog_target_url.get().strip(),
             "catalog_output_sheet": self.var_catalog_output_sheet.get().strip(),
             "catalog_output_start_row": self.var_catalog_output_start_row.get().strip(),
+            "catalog_dedupe_col": self.var_catalog_dedupe_col.get().strip(),
             "catalog_keep_each_header": self.var_catalog_keep_header.get(),
             "catalog_add_source": self.var_catalog_add_source.get(),
             "catalog_skip_existing": self.var_catalog_skip_existing.get(),
@@ -3105,9 +3110,13 @@ class DesktopApp(tk.Tk):
         self.var_catalog_start_row.set(str(getattr(cfg, "catalog_start_row", 2) or 2))
         self.var_catalog_url_col.set(getattr(cfg, "catalog_url_col", "B") or "B")
         self.var_catalog_sheet_col.set(getattr(cfg, "catalog_sheet_col", "D") or "D")
-        self.var_catalog_target_url.set(getattr(cfg, "catalog_target_url", "") or "")
+        catalog_targets = getattr(cfg, "catalog_target_url", "") or "; ".join(
+            getattr(cfg, "catalog_target_urls", None) or []
+        )
+        self.var_catalog_target_url.set(catalog_targets)
         self.var_catalog_output_sheet.set(getattr(cfg, "catalog_output_sheet", "目录汇总") or "目录汇总")
         self.var_catalog_output_start_row.set(str(getattr(cfg, "catalog_output_start_row", 1) or 1))
+        self.var_catalog_dedupe_col.set(str(getattr(cfg, "catalog_dedupe_col", "") or ""))
         self.var_catalog_keep_header.set(bool(getattr(cfg, "catalog_keep_each_header", False)))
         self.var_catalog_add_source.set(bool(getattr(cfg, "catalog_add_source", True)))
         self.var_catalog_skip_existing.set(bool(getattr(cfg, "catalog_skip_existing", True)))
