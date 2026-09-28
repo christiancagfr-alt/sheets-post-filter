@@ -235,7 +235,7 @@ def _cfg_type_list(raw) -> list[str]:
 
 
 def _cfg_type_rules(raw) -> list[dict[str, Any]]:
-    """Section-4 types: name plus whether they feed 总计数 / 逐条计数. Extra columns always count videos."""
+    """Section-4 types: 总计数 / 逐条计数, plus optional duration-split extra columns."""
     if isinstance(raw, str):
         values = raw.replace("，", "\n").replace(",", "\n").replace(";", "\n").splitlines()
     else:
@@ -247,12 +247,20 @@ def _cfg_type_rules(raw) -> list[dict[str, Any]]:
             text = _norm_type(item.get("name") or item.get("type") or "")
             in_total = bool(item.get("in_total", True))
             in_item = bool(item.get("in_item", True))
+            duration_split = bool(item.get("duration_split", False))
         else:
             text = _norm_type(item)
-            in_total, in_item = True, True
+            in_total, in_item, duration_split = True, True, False
         if text and text not in seen:
             seen.add(text)
-            out.append({"name": text, "in_total": in_total, "in_item": in_item})
+            out.append(
+                {
+                    "name": text,
+                    "in_total": in_total,
+                    "in_item": in_item,
+                    "duration_split": duration_split,
+                }
+            )
     return out
 
 
@@ -876,33 +884,59 @@ def _report_matrix(
     type_rules: list[dict[str, Any]] | None = None,
     duration_rules: list[dict[str, Any]] | None = None,
 ) -> tuple[list[str], list[list[Any]]]:
-    """按人和日期生成时长汇总；分档模式下每条视频只给一个区间加 1。"""
+    """Build the video report, including optional category→duration headers."""
     extra = [_norm_type(value) for value in (types or []) if _norm_type(value)]
     bucket_rules = _normalize_duration_rules(duration_rules) if count_mode == "duration_buckets" else []
     base_labels = [str(item["name"]) for item in bucket_rules] if bucket_rules else ["总计数", "逐条计数"]
     rules = {
-        _norm_type(item.get("name")): (bool(item.get("in_total", True)), bool(item.get("in_item", True)))
+        _norm_type(item.get("name")): (
+            bool(item.get("in_total", True)),
+            bool(item.get("in_item", True)),
+            bool(item.get("duration_split", False)),
+        )
         for item in (type_rules or [])
         if isinstance(item, dict) and _norm_type(item.get("name"))
     }
 
-    def _flags_for(typ: str) -> tuple[bool, bool]:
+    def _flags_for(typ: str) -> tuple[bool, bool, bool]:
         if not rules:
-            return True, True
+            return True, True, False
         key = _norm_type(typ)
         if key in rules:
             return rules[key]
         for name, flags in rules.items():
             if _type_equals(typ, name):
                 return flags
-        return True, True
+        return True, True, False
+
+    duration_buckets = _normalize_duration_rules(duration_rules)
+    columns: list[dict[str, str]] = [
+        {"key": label, "parent": "", "label": label, "kind": "base"}
+        for label in base_labels
+    ]
+    for pattern in extra:
+        _in_total, _in_item, split_by_duration = _flags_for(pattern)
+        if split_by_duration:
+            for duration_rule in duration_buckets:
+                bucket = str(duration_rule["name"])
+                columns.append(
+                    {
+                        "key": f"{pattern}\x1f{bucket}",
+                        "parent": pattern,
+                        "label": bucket,
+                        "kind": "category_duration",
+                    }
+                )
+        else:
+            columns.append({"key": pattern, "parent": "", "label": pattern, "kind": "category_count"})
+    hierarchical = any(column["parent"] for column in columns)
 
     totals: dict[str, float] = defaultdict(float)
     daily: dict[tuple[Any, str], float] = defaultdict(float)
     item_totals: dict[str, int] = defaultdict(int)
     item_daily: dict[tuple[Any, str], int] = defaultdict(int)
-    cat_item: dict[tuple[str, str], int] = defaultdict(int)
-    cat_daily: dict[tuple[Any, str, str], int] = defaultdict(int)
+    category_values: dict[tuple[str, str], int] = defaultdict(int)
+    category_daily: dict[tuple[Any, str, str], int] = defaultdict(int)
     bucket_totals: dict[tuple[str, str], int] = defaultdict(int)
     bucket_daily: dict[tuple[Any, str, str], int] = defaultdict(int)
     dates: set[Any] = set()
@@ -916,7 +950,7 @@ def _report_matrix(
         if day is None:
             continue
         typ = rec.get("type")
-        in_total, in_item = _flags_for(typ)
+        in_total, in_item, _split = _flags_for(typ)
         sec = rec.get("sec")
         if sec is not None:
             value = float(sec)
@@ -933,11 +967,19 @@ def _report_matrix(
                     item_count = _per_video_count(value)
                     item_totals[name] += item_count
                     item_daily[(day, name)] += item_count
-        # Extra category columns always count videos (5 videos → 5), never duration/30s.
+        # Extra columns count videos unless the category is explicitly split by duration.
         for pattern in extra:
             if _type_equals(typ, pattern):
-                cat_item[(name, pattern)] += 1
-                cat_daily[(day, name, pattern)] += 1
+                _include_total, _in_item, split_by_duration = _flags_for(pattern)
+                if split_by_duration and sec is not None:
+                    bucket = _duration_bucket(float(sec), duration_buckets)
+                    if bucket:
+                        key = f"{pattern}\x1f{bucket}"
+                        category_values[(name, key)] += 1
+                        category_daily[(day, name, key)] += 1
+                elif not split_by_duration:
+                    category_values[(name, pattern)] += 1
+                    category_daily[(day, name, pattern)] += 1
         dates.add(day)
 
     names: list[str] = []
@@ -952,7 +994,7 @@ def _report_matrix(
             set(totals)
             | set(item_totals)
             | {name for name, _label in bucket_totals}
-            | {name for name, _pattern in cat_item}
+            | {name for name, _pattern in category_values}
         )
         names.extend(
             sorted(
@@ -960,38 +1002,42 @@ def _report_matrix(
                 key=lambda value: value.casefold(),
             )
         )
-    block = len(base_labels) + len(extra)
+    block = len(columns)
     width = 1 + len(names) * block
-    stat_labels = base_labels + extra
 
     def _person_summary(name: str) -> list[Any]:
         if bucket_rules:
             cells: list[Any] = [bucket_totals[(name, label)] for label in base_labels]
         else:
             cells = [_qty_total(totals[name], unit), item_totals[name]]
-        cells.extend(cat_item[(name, pattern)] for pattern in extra)
+        cells.extend(category_values[(name, column["key"])] for column in columns[len(base_labels):])
         return cells
 
     def _person_day(day, name: str) -> list[Any]:
         if bucket_rules:
             cells: list[Any] = [bucket_daily.get((day, name, label), 0) for label in base_labels]
         else:
-            total = daily.get((day, name), 0.0)
-            cells = [_qty_total(total, unit), item_daily.get((day, name), 0)]
-        cells.extend(cat_daily.get((day, name, pattern), 0) for pattern in extra)
+            cells = [_qty_total(daily.get((day, name), 0), unit), item_daily.get((day, name), 0)]
+        cells.extend(category_daily.get((day, name, column["key"]), 0) for column in columns[len(base_labels):])
         return cells
 
     name_cells: list[Any] = []
     stat_cells: list[Any] = []
     for name in names:
         name_cells.extend([name] + [""] * (block - 1))
-        stat_cells.extend(stat_labels)
-    rows: list[list[Any]] = [
-        ["汇总范围", range_label] + [""] * max(0, width - 2),
-        ["日期"] + name_cells,
-        ["统计项"] + stat_cells,
-        ["本月汇总"] + [cell for name in names for cell in _person_summary(name)],
-    ]
+        stat_cells.extend(column["label"] for column in columns)
+    rows: list[list[Any]] = [["汇总范围", range_label] + [""] * max(0, width - 2), ["日期"] + name_cells]
+    if hierarchical:
+        parent_cells: list[Any] = []
+        for _name in names:
+            parent_cells.extend(column["parent"] for column in columns)
+        rows.append(["分类"] + parent_cells)
+    rows.extend(
+        [
+            ["统计项"] + stat_cells,
+            ["本月汇总"] + [cell for name in names for cell in _person_summary(name)],
+        ]
+    )
     for day in sorted(dates):
         row: list[Any] = [day.isoformat()]
         for name in names:
@@ -1000,20 +1046,48 @@ def _report_matrix(
     return names, rows
 
 
-def _format_report_sheet(ws, start_row: int, names: list[str], stat_labels: list[str], payload_len: int, log: LogFn) -> None:
+def _video_payload_meta(payload: list[list[Any]]) -> dict[str, Any]:
+    summary_index = next(
+        (index for index, row in enumerate(payload) if row and str(row[0] or "").strip() == "本月汇总"),
+        3,
+    )
+    stat_index = max(0, summary_index - 1)
+    parent_index = stat_index - 1 if stat_index > 1 and str(payload[stat_index - 1][0] or "").strip() == "分类" else -1
+    stat_row = payload[stat_index] if stat_index < len(payload) else []
+    parent_row = payload[parent_index] if 0 <= parent_index < len(payload) else []
+    return {
+        "summary_index": summary_index,
+        "labels": [str(value or "").strip() for value in stat_row[1:]],
+        "parents": [str(value or "").strip() for value in parent_row[1:]] if parent_row else [],
+    }
+
+
+def _format_report_sheet(
+    ws,
+    start_row: int,
+    names: list[str],
+    stat_labels: list[str],
+    payload_len: int,
+    log: LogFn,
+    parent_labels: list[str] | None = None,
+) -> None:
     """每人一块颜色：姓名合并，统计列按当前模式显示，人与人之间分隔线。"""
     if not names:
         return
     sheet_id = ws.id
     block = len(stat_labels)
     width = 1 + len(names) * block
+    parent_labels = list(parent_labels or [])
+    hierarchical = any(parent_labels)
     name_row = start_row + 1
+    stat_row_index = name_row + (2 if hierarchical else 1)
     last_row = start_row - 1 + max(payload_len, 4)
     try:
         last_row = max(last_row, int(getattr(ws, "row_count", last_row) or last_row))
     except Exception:
         pass
     try:
+        unmerge_width = max(width, int(getattr(ws, "col_count", width) or width))
         ws.spreadsheet.batch_update(
             {
                 "requests": [
@@ -1022,9 +1096,9 @@ def _format_report_sheet(ws, start_row: int, names: list[str], stat_labels: list
                             "range": {
                                 "sheetId": sheet_id,
                                 "startRowIndex": name_row - 1,
-                                "endRowIndex": name_row,
+                                "endRowIndex": stat_row_index,
                                 "startColumnIndex": 1,
-                                "endColumnIndex": width,
+                                "endColumnIndex": unmerge_width,
                             }
                         }
                     }
@@ -1043,7 +1117,7 @@ def _format_report_sheet(ws, start_row: int, names: list[str], stat_labels: list
         },
         {
             "updateDimensionProperties": {
-                "range": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": name_row - 1, "endIndex": name_row + 1},
+                "range": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": name_row - 1, "endIndex": stat_row_index},
                 "properties": {"pixelSize": 42},
                 "fields": "pixelSize",
             }
@@ -1101,13 +1175,39 @@ def _format_report_sheet(ws, start_row: int, names: list[str], stat_labels: list
                     }
                 }
             )
+        if hierarchical:
+            offset = 0
+            while offset < block:
+                parent = parent_labels[offset] if offset < len(parent_labels) else ""
+                if not parent:
+                    offset += 1
+                    continue
+                end_offset = offset + 1
+                while end_offset < block and end_offset < len(parent_labels) and parent_labels[end_offset] == parent:
+                    end_offset += 1
+                if end_offset - offset > 1:
+                    merge_requests.append(
+                        {
+                            "mergeCells": {
+                                "range": {
+                                    "sheetId": sheet_id,
+                                    "startRowIndex": name_row,
+                                    "endRowIndex": name_row + 1,
+                                    "startColumnIndex": start_col + offset,
+                                    "endColumnIndex": start_col + end_offset,
+                                },
+                                "mergeType": "MERGE_ALL",
+                            }
+                        }
+                    )
+                offset = end_offset
         requests.append(
             {
                 "repeatCell": {
                     "range": {
                         "sheetId": sheet_id,
                         "startRowIndex": name_row - 1,
-                        "endRowIndex": name_row + 1,
+                        "endRowIndex": stat_row_index,
                         "startColumnIndex": start_col,
                         "endColumnIndex": end_col,
                     },
@@ -1129,7 +1229,7 @@ def _format_report_sheet(ws, start_row: int, names: list[str], stat_labels: list
                 "repeatCell": {
                     "range": {
                         "sheetId": sheet_id,
-                        "startRowIndex": name_row + 1,
+                        "startRowIndex": stat_row_index,
                         "endRowIndex": last_row,
                         "startColumnIndex": start_col,
                         "endColumnIndex": end_col,
@@ -1166,7 +1266,7 @@ def _format_report_sheet(ws, start_row: int, names: list[str], stat_labels: list
             "updateSheetProperties": {
                 "properties": {
                     "sheetId": sheet_id,
-                    "gridProperties": {"frozenRowCount": min(start_row + 3, last_row), "frozenColumnCount": 1},
+                    "gridProperties": {"frozenRowCount": min(start_row + (4 if hierarchical else 3), last_row), "frozenColumnCount": 1},
                 },
                 "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
             }
@@ -1214,7 +1314,10 @@ def _parse_existing_video_report(ws, out_start: int) -> dict[str, Any] | None:
     if len(body) < 4 or str(body[1][0] or "").strip() != "日期":
         return None
     name_row = body[1]
-    stat_row = body[2]
+    meta = _video_payload_meta(body)
+    summary_index = int(meta["summary_index"])
+    stat_row = body[summary_index - 1]
+    parent_row = body[summary_index - 2] if summary_index > 3 else []
     names: list[str] = []
     starts: list[int] = []
     for index in range(1, len(name_row)):
@@ -1226,12 +1329,18 @@ def _parse_existing_video_report(ws, out_start: int) -> dict[str, Any] | None:
         return None
     block = starts[1] - starts[0] if len(starts) >= 2 else max(2, len(stat_row) - starts[0])
     labels = []
+    display_labels = []
+    parents = []
     for offset in range(block):
         idx = starts[0] + offset
-        labels.append(str(stat_row[idx] or "").strip() if idx < len(stat_row) else "")
+        label = str(stat_row[idx] or "").strip() if idx < len(stat_row) else ""
+        parent = str(parent_row[idx] or "").strip() if idx < len(parent_row) else ""
+        display_labels.append(label)
+        parents.append(parent)
+        labels.append(f"{parent}\x1f{label}" if parent else label)
     daily: dict[tuple[str, str, str], Any] = {}
     dates: list[str] = []
-    for row in body[4:]:
+    for row in body[summary_index + 1:]:
         day = _date_key(row[0] if row else "")
         if not day:
             continue
@@ -1240,7 +1349,15 @@ def _parse_existing_video_report(ws, out_start: int) -> dict[str, Any] | None:
             for offset, label in enumerate(labels):
                 col = start + offset
                 daily[(day, name, label or f"#{offset}")] = row[col] if col < len(row) else ""
-    return {"names": names, "labels": labels, "dates": dates, "daily": daily}
+    return {
+        "names": names,
+        "labels": labels,
+        "display_labels": display_labels,
+        "parents": parents,
+        "dates": dates,
+        "daily": daily,
+        "summary_index": summary_index,
+    }
 
 
 def _merge_video_payload(
@@ -1251,6 +1368,11 @@ def _merge_video_payload(
 ) -> list[list[Any]]:
     """Keep historical date rows from the current sheet when the log rebuild omits them."""
     if not existing or not payload or len(payload) < 4:
+        return payload
+    # Hierarchical category→duration reports are rebuilt from the complete log.
+    # The legacy merge format has only one statistics header row and would
+    # flatten/corrupt the new two-level header.
+    if any(_video_payload_meta(payload).get("parents") or []):
         return payload
     labels = list(base_labels or ["总计数", "逐条计数"]) + extra
     block = len(labels)
@@ -1319,6 +1441,7 @@ def _write_report_sheet(
     count_mode: str = "divide_total",
     type_rules: list[dict[str, Any]] | None = None,
     duration_rules: list[dict[str, Any]] | None = None,
+    force_refresh_header: bool = False,
 ) -> int:
     existing_names: list[str] = []
     try:
@@ -1334,19 +1457,12 @@ def _write_report_sheet(
         if count_mode == "duration_buckets"
         else ["总计数", "逐条计数"]
     )
-    previous = _parse_existing_video_report(ws, out_start)
+    previous = None if force_refresh_header else _parse_existing_video_report(ws, out_start)
+    if force_refresh_header:
+        log("已启用强制刷新表头：忽略旧表头锁定，重新生成数据、合并单元格和样式")
     header_locked = False
     if previous and previous.get("names"):
         existing_names = [str(name).strip() for name in previous.get("names") or [] if str(name).strip()]
-        header_labels = [str(label).strip() for label in previous.get("labels") or []]
-        if header_labels[: len(base_labels)] == base_labels:
-            extra = [_norm_type(label) for label in header_labels[len(base_labels) :] if _norm_type(label)]
-            header_locked = True
-        else:
-            log("计数方式或时长规则已变化，将重写数据表统计表头")
-        missing = sorted({_norm_name(rec.get("name")) for rec in records} - set(existing_names) - {""})
-        if header_locked and missing:
-            log("表头已固定，未自动加列的人：" + "、".join(missing[:12]) + ("…" if len(missing) > 12 else ""))
     # 数据表按日志全量汇总。日期筛选只影响新查询，避免每次重跑把历史日期刷掉。
     names, payload = _report_matrix(
         records,
@@ -1357,12 +1473,51 @@ def _write_report_sheet(
         extra,
         preferred_names=existing_names,
         count_mode=count_mode,
-        lock_names=header_locked,
+        lock_names=False,
         type_rules=type_rules,
         duration_rules=normalized_duration_rules,
     )
+    meta = _video_payload_meta(payload)
+    block = max(1, len(meta.get("labels") or []) // max(1, len(names)))
+    current_display_labels = list(meta.get("labels") or [])[:block]
+    current_parents = list(meta.get("parents") or [])[:block]
+    previous_display = list((previous or {}).get("display_labels") or (previous or {}).get("labels") or [])
+    previous_parents = list((previous or {}).get("parents") or [])
+    parent_anchors_match = not any(previous_parents) if not current_parents else True
+    if current_parents:
+        for offset, parent in enumerate(current_parents):
+            is_group_start = bool(parent) and (offset == 0 or current_parents[offset - 1] != parent)
+            previous_parent = previous_parents[offset] if offset < len(previous_parents) else ""
+            # Sheets returns only the top-left value of a merged parent header.
+            if (previous_parent and previous_parent != parent) or (is_group_start and previous_parent != parent):
+                parent_anchors_match = False
+                break
+    headers_match = previous_display == current_display_labels and parent_anchors_match
+    if previous and previous.get("names") and headers_match:
+        header_locked = True
+        names, payload = _report_matrix(
+            records,
+            None,
+            None,
+            unit,
+            range_label,
+            extra,
+            preferred_names=existing_names,
+            count_mode=count_mode,
+            lock_names=True,
+            type_rules=type_rules,
+            duration_rules=normalized_duration_rules,
+        )
+        meta = _video_payload_meta(payload)
+        missing = sorted({_norm_name(rec.get("name")) for rec in records} - set(existing_names) - {""})
+        if missing:
+            log("表头已固定，未自动加列的人：" + "、".join(missing[:12]) + ("…" if len(missing) > 12 else ""))
+    elif previous:
+        log("分类或时间规则已变化，将重写数据表统计表头")
     payload = _merge_video_payload(payload, previous, extra, base_labels)
-    labels = base_labels + extra
+    meta = _video_payload_meta(payload)
+    labels = list(meta.get("labels") or [])[:block]
+    parents = list(meta.get("parents") or [])[:block]
     header_locked = header_locked and list(names) == list(existing_names)
     total_cols = max((len(row) for row in payload), default=1)
     end_col = index_to_col_letter(total_cols - 1)
@@ -1372,10 +1527,11 @@ def _write_report_sheet(
         safe_resize_ws(ws, max(need_rows, 40), max(total_cols, 1), log=log)
     except RuntimeError as exc:
         raise RuntimeError("数据表单元格超过上限，请换空表或删掉空白列后再提取。已写入的内容不会清成 1 格。") from exc
-    if header_locked and len(payload) > 3:
-        body = payload[3:]
-        write_start = out_start + 3
-        log("表头第 1-3 行已保留（姓名和分类列不动），只刷新本月汇总和各日期数量")
+    summary_index = int(meta.get("summary_index", 3))
+    if header_locked and len(payload) > summary_index:
+        body = payload[summary_index:]
+        write_start = out_start + summary_index
+        log(f"表头第 1-{summary_index} 行已保留（姓名和分类列不动），只刷新本月汇总和各日期数量")
     else:
         body = payload
         write_start = out_start
@@ -1406,11 +1562,11 @@ def _write_report_sheet(
     except Exception:
         pass
     try:
-        _format_report_sheet(ws, out_start, names, labels, len(payload), log)
+        _format_report_sheet(ws, out_start, names, labels, len(payload), log, parents)
         log("已按人分色同步到全部日期行（含新增加的日期）")
     except Exception as exc:
         log(f"设置时长数据表样式失败，数据已写入：{exc}")
-    log(f"已写入「{ws.title}」：{len(names)} 人，{max(0, len(payload) - 4)} 个日期")
+    log(f"已写入「{ws.title}」：{len(names)} 人，{max(0, len(payload) - summary_index - 1)} 个日期")
     return len(names)
 
 
@@ -2099,6 +2255,7 @@ def run_video_duration(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
             count_mode,
             type_rules,
             duration_rules,
+            force_refresh_header=bool(getattr(cfg, "vd_force_refresh_header", False)),
         )
         return people
 

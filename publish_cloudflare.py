@@ -239,6 +239,32 @@ def extract_url_from_cell(value: Any) -> str:
     return (m.group(0) if m else text).strip()
 
 
+def drive_file_id(url: str) -> str:
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    match = re.search(r"(?:drive|docs)\.google\.com/file/d/([^/?#]+)", text, re.I)
+    if match:
+        return match.group(1)
+    match = re.search(r"lh3\.googleusercontent\.com/d/([a-zA-Z0-9_-]+)", text, re.I)
+    if match:
+        return match.group(1)
+    if re.search(r"(?:drive|docs|usercontent)\.google\.com", text, re.I):
+        match = re.search(r"[?&]id=([^&#]+)", text, re.I)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def public_image_url(url: str) -> str:
+    """Turn Drive file/view links into an embeddable image URL for <img> tags."""
+    raw = extract_url_from_cell(url)
+    file_id = drive_file_id(raw)
+    if file_id:
+        return f"https://lh3.googleusercontent.com/d/{file_id}"
+    return raw
+
+
 def _date_text(value: Any) -> str:
     dt = to_datetime(value)
     if not dt:
@@ -319,8 +345,8 @@ def rows_to_assets(
         name = _text(col("名字")) or _text(_cell(row, 0))
         post_id = _text(col("帖文id"))
         post_link = _first_http(col("FB链接"), _cell(row, 2), _cell(row, 18))
-        thumb = _first_http(col("缩略图链接"), _cell(row, 4), _cell(row, 22))
-        fallback = _first_http(col("备用图片"), _cell(row, 22), _cell(row, 4))
+        thumb = public_image_url(_first_http(col("缩略图链接"), _cell(row, 4), _cell(row, 22)))
+        fallback = public_image_url(_first_http(col("备用图片"), _cell(row, 22), _cell(row, 4)))
         post_type = _text(col("帖文类型"))
         category = _text(col("图片类型"))
         group = ""

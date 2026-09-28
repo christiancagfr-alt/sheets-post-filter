@@ -1,0 +1,21 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Robots-Tag: noindex, nofollow, noarchive, nosnippet, noimageindex
+
+/assets/*
+  Cache-Control: public, max-age=3600
+
+/*.html
+  Cache-Control: no-store
+
+/api/*
+  Cache-Control: no-store
+
+/api/avatar
+  Cache-Control: public, max-age=604800
+
+/robots.txt
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=3600
+

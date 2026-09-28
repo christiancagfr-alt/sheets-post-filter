@@ -418,6 +418,7 @@ def _cfg_from_payload(data: dict, base: Config | None = None) -> Config:
                                 "name": name,
                                 "in_total": bool(item.get("in_total", True)),
                                 "in_item": bool(item.get("in_item", True)),
+                                "duration_split": bool(item.get("duration_split", False)),
                             }
                         )
                 elif str(item).strip():
@@ -546,6 +547,7 @@ def _cfg_from_payload(data: dict, base: Config | None = None) -> Config:
         "vd_date_filter_enabled",
         "vd_write_log",
         "vd_empty_to_other",
+        "vd_force_refresh_header",
     ):
         if flag in data:
             setattr(cfg, flag, bool(data[flag]))
@@ -1125,6 +1127,7 @@ def api_config():
                 "vd_date_filter_enabled": cfg.vd_date_filter_enabled,
                 "vd_type_filter_mode": cfg.vd_type_filter_mode,
                 "vd_write_log": cfg.vd_write_log,
+                "vd_force_refresh_header": cfg.vd_force_refresh_header,
                 "vd_columns": cfg.vd_columns,
                 "catalog_index_url": cfg.catalog_index_url,
                 "catalog_index_sheet": cfg.catalog_index_sheet,
@@ -1275,6 +1278,14 @@ def _run_video_job(cfg: Config, from_schedule: bool = False, job_key: str = "def
     except Exception as e:
         _record_job_failure(e, "视频汇总", job)
     finally:
+        if bool(getattr(cfg, "vd_force_refresh_header", False)):
+            # 强制刷新是一次性操作，不能让后续定时任务每次都重建表头。
+            try:
+                latest_cfg = load_config()
+                latest_cfg.vd_force_refresh_header = False
+                save_config(latest_cfg)
+            except Exception as exc:
+                _log(f"重置一次性表头刷新标记失败：{exc}", job)
         job["running"] = False
         job["finished_at"] = datetime.now().strftime("%H:%M:%S")
         if lock.locked():

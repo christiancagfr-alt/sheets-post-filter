@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+    <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+    <title>每日推广引流数据更新</title>
+    <link rel="stylesheet" href="assets/styles.css?v=20260801-refresh-cdn-btn">
+  </head>
+  <body>
+    <section class="auth-screen" id="authGate">
+      <form class="auth-card" id="passwordForm">
+        <p class="eyebrow">Sheet 后端 / Vercel 前端</p>
+        <h1>每日推广引流数据更新</h1>
+        <label class="auth-field">
+          <span>访问密码</span>
+          <input id="passwordInput" type="password" autocomplete="current-password" placeholder="输入密码">
+        </label>
+        <button class="primary-button" type="submit">进入</button>
+        <p class="auth-error" id="passwordError" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <main class="app-shell" id="appShell" hidden>
+      <header class="topbar">
+        <div class="brand-block">
+          <p class="eyebrow">Sheet 后端 / Vercel 前端</p>
+          <h1>每日推广引流数据更新</h1>
+        </div>
+        <div class="top-actions">
+          <a class="ghost-button nav-button" href="/leaderboard" title="查看引流排行榜">
+            <span aria-hidden="true">#</span>
+            引流榜
+          </a>
+          <a class="ghost-button nav-button" href="/likes-leaderboard" title="按 J 列点赞排行，名字后显示 AB 列美工">
+            <span aria-hidden="true">👍</span>
+            点赞榜
+          </a>
+          <a class="ghost-button nav-button" href="/water-leaderboard" title="查看水滴排行榜">
+            <span aria-hidden="true">💧</span>
+            水滴榜
+          </a>
+          <button class="ghost-button" id="syncBtn" type="button" title="从 CDN 拉取最新数据到本机（几乎不耗配额）">
+            <span aria-hidden="true">↻</span>
+            同步
+          </button>
+          <button
+            class="ghost-button is-warn"
+            id="refreshCdnBtn"
+            type="button"
+            title="把 Drive 最新导出镜像到 CDN。会消耗 Drive/Worker 配额，请慎重点击"
+          >
+            <span aria-hidden="true">☁</span>
+            刷新CDN
+          </button>
+          <input class="visually-hidden" id="csvImportInput" type="file" accept=".csv,text/csv">
+          <button class="ghost-button" id="csvImportBtn" type="button" title="从 Google Sheets 下载的 CSV 导入本地缓存">
+            <span aria-hidden="true">CSV</span>
+            导入
+          </button>
+        </div>
+      </header>
+
+      <section class="status-strip" aria-live="polite">
+        <div>
+          <span class="status-label">状态</span>
+          <strong id="statusText">正在载入本地缓存...</strong>
+        </div>
+        <div>
+          <span class="status-label">缓存</span>
+          <strong id="lastUpdated">未同步</strong>
+        </div>
+        <div>
+          <span class="status-label">数据</span>
+          <strong><span id="filteredCount">0</span> / <span id="recordCount">0</span></strong>
+        </div>
+        <div>
+          <span class="status-label">刷新</span>
+          <strong id="refreshProgress">空闲</strong>
+          <small id="refreshLog" class="status-log"></small>
+        </div>
+      </section>
+
+      <section class="filter-panel" aria-label="筛选">
+        <div class="filter-heading">
+          <h2>筛选</h2>
+          <button class="text-button" id="clearFiltersBtn" type="button">清空</button>
+        </div>
+
+        <div class="filter-grid">
+          <label class="field wide-field">
+            <span>搜索</span>
+            <input id="searchInput" type="search" placeholder="名字 / 美工 / 渠道 / 专页名（空格可多词）" autocomplete="off">
+          </label>
+
+          <label class="field">
+            <span>开始日期</span>
+            <input id="dateStart" type="date">
+          </label>
+
+          <label class="field">
+            <span>结束日期</span>
+            <input id="dateEnd" type="date">
+          </label>
+
+          <label class="field">
+            <span>分类</span>
+            <select id="categoryFilter">
+              <option value="">全部分类</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>来源</span>
+            <select id="sourceTypeFilter">
+              <option value="">全部来源类型</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>渠道</span>
+            <select id="sourceChannelFilter">
+              <option value="">全部来源渠道</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>贴文</span>
+            <select id="postTypeFilter">
+              <option value="">全部贴文类型</option>
+            </select>
+          </label>
+
+          <label class="field mini-field">
+            <span>点赞</span>
+            <input id="minLikes" type="number" min="0" step="1" inputmode="numeric" placeholder="≥ 数值">
+          </label>
+
+          <label class="field mini-field">
+            <span>评论</span>
+            <input id="minComments" type="number" min="0" step="1" inputmode="numeric" placeholder="≥ 数值">
+          </label>
+
+          <label class="field mini-field">
+            <span>引流</span>
+            <input id="minLead" type="number" min="0" step="1" inputmode="numeric" placeholder="≥ 数值">
+          </label>
+
+          <label class="field sort-field">
+            <span>排序</span>
+            <select id="sortSelect">
+              <option value="dateDesc">日期新到旧</option>
+              <option value="dateAsc">日期旧到新</option>
+              <option value="likesDesc">点赞高到低</option>
+              <option value="commentsDesc">评论高到低</option>
+              <option value="leadDesc">引流高到低</option>
+              <option value="leadAsc">引流低到高</option>
+              <option value="waterDesc">水滴高到低</option>
+              <option value="conversionDesc">转换率高到低</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="content-panel">
+        <div class="content-toolbar">
+          <div>
+            <h2>素材</h2>
+            <p id="syncText">同步先比较缓存版本；刷新日志会显示百分比、剩余数量和每次新增进度。</p>
+          </div>
+        </div>
+
+        <div class="gallery" id="gallery" aria-live="polite"></div>
+
+        <div class="empty-state" id="emptyState" hidden>
+          <h3>没有匹配的数据</h3>
+          <p>请先点「清空」再搜。若名字在表里是「未找到」，请搜美工/渠道名，或修复表格 A 列后重新导出。也可点「同步」刷新本地缓存。</p>
+        </div>
+
+        <div class="load-more-row">
+          <button class="ghost-button" id="loadMoreBtn" type="button" hidden>加载更多</button>
+        </div>
+      </section>
+    </main>
+
+    <template id="cardTemplate">
+      <article class="asset-card">
+        <a class="thumb-link" target="_blank" rel="noreferrer">
+          <img class="thumb" alt="" referrerpolicy="no-referrer" loading="lazy">
+          <span class="thumb-fallback">无预览图</span>
+        </a>
+        <div class="card-body">
+          <div class="card-title-row">
+            <h3></h3>
+            <span class="media-badge"></span>
+          </div>
+          <div class="meta-line"></div>
+          <div class="metric-row"></div>
+          <dl class="detail-list"></dl>
+          <div class="text-block primary-text"></div>
+          <div class="text-block translated-text"></div>
+          <div class="card-actions"></div>
+        </div>
+      </article>
+    </template>
+
+    <script>
+      /**
+       * 配额策略（对齐素材库 creatives / q-gallery）：
+       * 1) 优先 R2 CDN Manifest（浏览器直读，0 Worker / 0 Apps Script）
+       * 2) 本地 IndexedDB 有数据且 buildId 未变 → 跳过自动同步
+       * 3) Drive Manifest 仅作日更上游；publish-cache 镜像到 R2 后用户不碰 Drive
+       * 4) 默认关闭 Apps Script 分页同步
+       */
+      // 日更镜像后的 CDN（publish-cache 成功后启用；未发布前可先用 Drive）
+      window.Q_GALLERY_DRIVE_CACHE_MANIFEST_URL =
+        "https://gallery-cache.zhixianglife.com/promo/manifest.json";
+      // Drive 上游（CDN 404 时用 JSON同步粘贴，或临时改回这行）
+      window.Q_GALLERY_DRIVE_FALLBACK_MANIFEST_URL =
+        "https://drive.google.com/uc?export=download&id=1zj9ZJHGO_q6iuWdHiBgCghE0LA--snxi";
+      window.Q_GALLERY_ENABLE_APPS_SCRIPT_SYNC = false;
+      // 本地缓存最长视为新鲜的时间（默认 6 小时）
+      // window.Q_GALLERY_LOCAL_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+    </script>
+    <script src="assets/app.js?v=20260903-drive-img" defer></script>
+  </body>
+</html>

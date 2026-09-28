@@ -141,13 +141,15 @@ class TemplateConfigTests(unittest.TestCase):
             {
                 "vd_types": [
                     {"name": "口播", "in_total": True, "in_item": False},
-                    {"name": "wsp", "in_total": False, "in_item": True},
+                    {"name": "wsp", "in_total": False, "in_item": True, "duration_split": True},
                 ]
             },
             base=app.Config(),
         )
         self.assertEqual(cfg_rules.vd_types[0]["in_item"], False)
+        self.assertFalse(cfg_rules.vd_types[0]["duration_split"])
         self.assertEqual(cfg_rules.vd_types[1]["in_total"], False)
+        self.assertTrue(cfg_rules.vd_types[1]["duration_split"])
 
     def test_sync_schedulers_keep_video_when_other_menu_has_no_timer(self):
         app.stop_all_menu_schedulers()
@@ -965,6 +967,76 @@ class VideoReportTests(unittest.TestCase):
         self.assertEqual(rows[3][2], 3)
         self.assertEqual(rows[3][3], 1)
         self.assertEqual(rows[3][4], 1)
+
+    def test_category_duration_split_uses_configured_time_rules(self):
+        records = [
+            {"name": "甲", "type": "Flow-omini", "date": "2026-08-01", "sec": 45},
+            {"name": "甲", "type": "Flow-omini", "date": "2026-08-01", "sec": 75},
+            {"name": "甲", "type": "普通", "date": "2026-08-01", "sec": 90},
+        ]
+        rules = [
+            {"name": "Flow-omini", "in_total": True, "in_item": True, "duration_split": True},
+            {"name": "普通", "in_total": True, "in_item": False, "duration_split": False},
+        ]
+        duration_rules = [
+            {"name": "1分钟内", "min_seconds": None, "max_seconds": 60},
+            {"name": "1分钟以上", "min_seconds": 60, "max_seconds": None},
+        ]
+        _names, rows = _report_matrix(
+            records,
+            None,
+            None,
+            30,
+            "全部",
+            types=["Flow-omini", "普通"],
+            preferred_names=["甲"],
+            type_rules=rules,
+            duration_rules=duration_rules,
+        )
+        self.assertEqual(rows[2][3:5], ["Flow-omini", "Flow-omini"])
+        self.assertEqual(rows[3][3:6], ["1分钟内", "1分钟以上", "普通"])
+        # 逐条计数排除了未勾选“按时长分类”的普通类别。
+        self.assertEqual(rows[4][1:6], [7, 4, 1, 1, 1])
+
+    def test_payload_keeps_duration_split_and_writes_two_level_headers(self):
+        cfg = app._cfg_from_payload(
+            {
+                "vd_types": [
+                    {"name": "开场口播", "in_total": False, "in_item": True, "duration_split": False},
+                    {"name": "Flow-批量", "in_total": False, "in_item": True, "duration_split": True},
+                    {"name": "Flow-omini", "in_total": False, "in_item": True, "duration_split": True},
+                ],
+                "vd_duration_rules": [
+                    {"name": "1分钟以内", "max_seconds": 60},
+                    {"name": "一分钟以上", "min_seconds": 60},
+                ],
+            },
+            base=app.Config(),
+        )
+        from video_duration import _cfg_type_rules, _report_matrix
+
+        rules = _cfg_type_rules(cfg.vd_types)
+        records = [
+            {"name": "佳佳", "type": "Flow-omini", "date": "2026-08-01", "sec": 32},
+            {"name": "佳佳", "type": "Flow-批量", "date": "2026-08-01", "sec": 90},
+        ]
+        _names, rows = _report_matrix(
+            records,
+            None,
+            None,
+            30,
+            "全部",
+            types=["开场口播", "Flow-批量", "Flow-omini"],
+            preferred_names=["佳佳"],
+            type_rules=rules,
+            duration_rules=cfg.vd_duration_rules,
+        )
+        self.assertEqual(rows[2][0], "分类")
+        self.assertGreaterEqual(rows[2].count("Flow-批量"), 2)
+        self.assertGreaterEqual(rows[2].count("Flow-omini"), 2)
+        self.assertEqual(rows[3].count("1分钟以内"), 2)
+        self.assertEqual(rows[3].count("一分钟以上"), 2)
+        self.assertIn("开场口播", rows[3])
 
     def test_catalog_dedupe_and_date_filter_helpers(self):
         from datetime import date

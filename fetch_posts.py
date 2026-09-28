@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import re
 import sys
@@ -35,6 +36,9 @@ def resource_dir() -> Path:
 
 def data_dir() -> Path:
     """配置、状态、密钥所在目录（exe 旁边，可写）。"""
+    override = os.environ.get("SHEETS_POST_FILTER_DATA_DIR", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
@@ -492,6 +496,8 @@ class Config:
             {"name": "181秒以上", "min_seconds": 180, "max_seconds": None},
         ]
     )
+    # One-shot action: rebuild video report headers/merges/styles on the next run.
+    vd_force_refresh_header: bool = False
     vd_start_date: str = ""
     vd_end_date: str = ""
     vd_batch_size: int = 100

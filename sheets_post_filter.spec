@@ -34,7 +34,7 @@ a = Analysis(
     ["desktop_app.py"],
     pathex=[],
     binaries=manual_binaries,
-    datas=[("web", "web"), ("logo.ico", ".")] + manual_datas,
+    datas=[("web", "web"), ("logo.ico", "."), ("promo-site", "promo-site")] + manual_datas,
     hiddenimports=hidden
     + [
         "google.auth",
@@ -54,10 +54,13 @@ a = Analysis(
         "tkinter",
         "tkinter.ttk",
         "tkinter.messagebox",
+        "blake3",
         "video_duration",
         "catalog_merge",
         "post_aggregate",
         "roster_fill",
+        "promo_deploy",
+        "publish_cloudflare",
     ],
     hookspath=[],
     hooksconfig={},

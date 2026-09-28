@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+    <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+    <title>点赞排行榜 - 每日推广引流数据更新</title>
+    <link rel="stylesheet" href="assets/styles.css?v=20260802-channel-avatar">
+  </head>
+  <body data-rank-metric="likes">
+    <section class="auth-screen" id="authGate">
+      <form class="auth-card" id="passwordForm">
+        <p class="eyebrow">Sheet 后端 / Vercel 前端</p>
+        <h1>点赞排行榜</h1>
+        <label class="auth-field">
+          <span>访问密码</span>
+          <input id="passwordInput" type="password" autocomplete="current-password" placeholder="输入密码">
+        </label>
+        <button class="primary-button" type="submit">进入</button>
+        <p class="auth-error" id="passwordError" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <main class="app-shell leaderboard-shell" id="appShell" hidden>
+      <header class="topbar">
+        <div class="brand-block">
+          <p class="eyebrow">按 J 列点赞数排名 · 名字后显示 AB 列美工</p>
+          <h1>点赞排行榜</h1>
+        </div>
+        <div class="top-actions">
+          <a class="ghost-button nav-button" href="/" title="返回素材列表">
+            <span aria-hidden="true">←</span>
+            素材库
+          </a>
+          <a class="ghost-button nav-button" href="/leaderboard" title="查看引流排行榜">
+            <span aria-hidden="true">#</span>
+            引流榜
+          </a>
+          <a class="ghost-button nav-button" href="/water-leaderboard" title="查看水滴排行榜">
+            <span aria-hidden="true">💧</span>
+            水滴榜
+          </a>
+          <button class="ghost-button" id="syncBtn" type="button" title="从共享缓存加载排行榜数据">
+            <span aria-hidden="true">↻</span>
+            加载数据
+          </button>
+        </div>
+      </header>
+
+      <section class="status-strip leaderboard-status" aria-live="polite">
+        <div>
+          <span class="status-label">状态</span>
+          <strong id="statusText">正在载入缓存...</strong>
+        </div>
+        <div>
+          <span class="status-label">范围</span>
+          <strong id="rangeText">最近 7 天</strong>
+        </div>
+        <div>
+          <span class="status-label">上榜</span>
+          <strong><span id="rankCount">0</span> 条</strong>
+        </div>
+        <div>
+          <span class="status-label">数据</span>
+          <strong><span id="recordCount">0</span> 条</strong>
+        </div>
+      </section>
+
+      <section class="filter-panel leaderboard-controls" aria-label="排行榜范围">
+        <div class="filter-heading">
+          <h2>时间范围</h2>
+          <button class="text-button" id="reloadBtn" type="button">重新加载</button>
+        </div>
+        <div class="range-tabs" role="tablist" aria-label="排行榜时间范围">
+          <button class="range-tab" type="button" data-range="today">当天</button>
+          <button class="range-tab" type="button" data-range="yesterday">昨天</button>
+          <button class="range-tab is-active" type="button" data-range="7">最近 7 天</button>
+          <button class="range-tab" type="button" data-range="30">最近 30 天</button>
+        </div>
+      </section>
+
+      <section class="content-panel leaderboard-panel">
+        <div class="content-toolbar">
+          <div>
+            <h2>排名</h2>
+            <p id="summaryText">按点赞数从高到低排序。</p>
+          </div>
+        </div>
+
+        <div class="leaderboard-table-wrap">
+          <table class="leaderboard-table">
+            <thead>
+              <tr>
+                <th>排名</th>
+                <th>头像</th>
+                <th>点赞</th>
+                <th>名字 · 美工</th>
+                <th>图片(W)</th>
+                <th>来源渠道</th>
+                <th>来源类型</th>
+                <th>文案</th>
+                <th>日期</th>
+                <th>贴文链接</th>
+              </tr>
+            </thead>
+            <tbody id="leaderboardBody"></tbody>
+          </table>
+        </div>
+
+        <div class="empty-state" id="emptyState" hidden>
+          <h3>暂无排行榜数据</h3>
+          <p>当前时间范围内没有点赞数据，或还没有点击加载数据。请确认缓存 JSON 含 J 列（点赞）与 AB 列（美工）。</p>
+        </div>
+
+        <div class="load-more-row">
+          <button class="ghost-button" id="loadMoreBtn" type="button" hidden>加载更多</button>
+        </div>
+      </section>
+    </main>
+
+        <script>
+      window.Q_GALLERY_DRIVE_CACHE_MANIFEST_URL = "https://gallery-cache.zhixianglife.com/promo/manifest.json";
+      window.Q_GALLERY_DRIVE_FALLBACK_MANIFEST_URL = "https://drive.google.com/uc?export=download&id=1zj9ZJHGO_q6iuWdHiBgCghE0LA--snxi";
+    </script>
+    <script src="assets/leaderboard.js?v=20260903-drive-img" defer></script>
+  </body>
+</html>

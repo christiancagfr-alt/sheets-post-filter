@@ -11,11 +11,19 @@ import sys
 import threading
 import time
 import traceback
+import webbrowser
 import tkinter as tk
 import copy
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
+
+# 源码版也沿用已安装版本的配置、服务账号和运行状态。这样无论通过
+# 启动脚本还是直接执行 desktop_app.py，都不会误读源码目录中的空配置。
+if not os.environ.get("SHEETS_POST_FILTER_DATA_DIR"):
+    _installed_data_dir = Path(os.environ.get("LOCALAPPDATA", "")) / "sheets-post-filter"
+    if (_installed_data_dir / "config.json").exists():
+        os.environ["SHEETS_POST_FILTER_DATA_DIR"] = str(_installed_data_dir)
 
 from fetch_posts import (
     LOG_DIR,
@@ -63,6 +71,14 @@ from app import (
     sync_schedulers_from_menus,
 )
 from version import APP_VERSION, RELEASES_URL, UPDATE_API_URL, version_tuple
+from promo_deploy import (
+    TOKEN_CREATE_URL,
+    CloudflareError,
+    deploy_gallery,
+    load_cf_state,
+    login_with_token,
+    normalize_host,
+)
 
 MUTEX_PORT = 18765
 C = {
@@ -961,7 +977,7 @@ class DesktopApp(tk.Tk):
             else:
                 add_fn(value)
 
-    def _add_vd_type(self, value: str = "", in_total: bool = True, in_item: bool = True) -> None:
+    def _add_vd_type(self, value: str = "", in_total: bool = True, in_item: bool = True, duration_split: bool = False) -> None:
         row = tk.Frame(self.vd_type_box, bg=C["card"])
         row.pack(fill="x", pady=3)
         e = tk.Entry(row, font=MONO, relief="solid", bd=1)
@@ -971,12 +987,15 @@ class DesktopApp(tk.Tk):
         checks.pack(side="left", padx=(8, 0))
         var_total = tk.BooleanVar(value=bool(in_total))
         var_item = tk.BooleanVar(value=bool(in_item))
+        var_split = tk.BooleanVar(value=bool(duration_split))
         tk.Checkbutton(checks, text="总计数", variable=var_total, bg=C["card"], fg=C["ink"], activebackground=C["card"], selectcolor="#fff", font=FS).pack(side="left")
         tk.Checkbutton(checks, text="逐条计数", variable=var_item, bg=C["card"], fg=C["ink"], activebackground=C["card"], selectcolor="#fff", font=FS).pack(side="left")
+        tk.Checkbutton(checks, text="按时长分类", variable=var_split, bg=C["card"], fg=C["ink"], activebackground=C["card"], selectcolor="#fff", font=FS).pack(side="left")
         StyleBtn(row, "ghost", text="删除", command=lambda: self._del_vd_type(row)).pack(side="left", padx=(6, 0))
         row._val = e
         row._in_total = var_total
         row._in_item = var_item
+        row._duration_split = var_split
         row._checks = checks
         e.bind("<KeyRelease>", lambda _e: self._upd_vd_type_count())
         self._vd_type_rows.append(row)
@@ -1016,6 +1035,7 @@ class DesktopApp(tk.Tk):
                         "name": t,
                         "in_total": bool(r._in_total.get()) if hasattr(r, "_in_total") else True,
                         "in_item": bool(r._in_item.get()) if hasattr(r, "_in_item") else True,
+                        "duration_split": bool(r._duration_split.get()) if hasattr(r, "_duration_split") else False,
                     }
                 )
         return out
@@ -1192,6 +1212,8 @@ class DesktopApp(tk.Tk):
                 self.vd_duration_rule_wrap.pack_forget()
             if hasattr(self, "vd_report_cat_wrap"):
                 self.vd_report_cat_wrap.pack_forget()
+            if hasattr(self, "vd_force_refresh_btn"):
+                self.vd_force_refresh_btn.pack_forget()
             if hasattr(self, "vd_wildcard_note"):
                 self.vd_wildcard_note.pack(anchor="w", pady=(0, 4))
             if hasattr(self, "vd_type_head"):
@@ -1219,6 +1241,8 @@ class DesktopApp(tk.Tk):
                 self.vd_duration_rule_wrap.pack(fill="x", pady=(8, 0), after=self.vd_video_opts)
             if hasattr(self, "vd_report_cat_wrap"):
                 self.vd_report_cat_wrap.pack(fill="x", pady=(8, 0))
+            if hasattr(self, "vd_force_refresh_btn"):
+                self.vd_force_refresh_btn.pack(anchor="e", pady=(8, 2))
             if hasattr(self, "vd_wildcard_note"):
                 self.vd_wildcard_note.pack_forget()
             if hasattr(self, "vd_type_head") and not self.vd_type_head.winfo_ismapped():
@@ -1232,7 +1256,7 @@ class DesktopApp(tk.Tk):
                         row._checks.pack(side="left", padx=(8, 0))
             self.vd_type_note.configure(
                 text="只跑这些分类（精确匹配）。都会提取时长写入日志。"
-                "勾选「总计数」才把该分类按时长计入总计数；勾选「逐条」才按时长规则计入逐条计数。都不勾则只进日志和额外分类列。"
+                "勾选「总计数」后计入当前的总计数算法；勾选「按时长分类」后，才按下方时间规则拆分统计，并计入逐条计数。未勾选按时长分类的分类，不会进入逐条计数。"
             )
             self.vd_dest_note.configure(
                 text="可选择总秒数换算、逐条阶梯计数或按时长区间统计数量。时长区间模式每条视频只计入一个区间；额外分类列仍按视频个数计。"
@@ -1245,7 +1269,7 @@ class DesktopApp(tk.Tk):
             self.vd_sched_check.configure(text="启用视频时长定时")
             self.vd_help_note.configure(
                 text="日志表：A 日期、B 链接、C 名字、D 时长(秒)、E 类型、F 备注（未识别原因）。已跑过的链接下次自动跳过。"
-                "数据表：普通模式显示总计数和逐条计数；时长区间模式分别显示每个区间的视频数量。添加分类还能继续加列。"
+                "数据表：未勾选按时长分类的分类显示普通数量；勾选后按时间规则展开子列，并且只有勾选的分类进入逐条计数。"
                 "未识别常见原因：不是视频、没有权限、Drive 还没生成时长。源表和 Drive 文件都要共享给服务账号。"
             )
 
@@ -1258,15 +1282,22 @@ class DesktopApp(tk.Tk):
             if isinstance(item, dict):
                 name = str(item.get("name") or "").strip()
                 if name:
-                    cleaned.append((name, bool(item.get("in_total", True)), bool(item.get("in_item", True))))
+                    cleaned.append(
+                        (
+                            name,
+                            bool(item.get("in_total", True)),
+                            bool(item.get("in_item", True)),
+                            bool(item.get("duration_split", False)),
+                        )
+                    )
             elif str(item).strip():
-                cleaned.append((str(item).strip(), True, True))
+                cleaned.append((str(item).strip(), True, True, False))
         if not cleaned:
             self._add_vd_type()
             self._add_vd_type()
             return
-        for name, in_total, in_item in cleaned:
-            self._add_vd_type(name, in_total, in_item)
+        for name, in_total, in_item, duration_split in cleaned:
+            self._add_vd_type(name, in_total, in_item, duration_split)
 
     def _add_vd_extra_col(self, field: str = "分类", column: str = "") -> None:
         row = tk.Frame(self.vd_extra_col_box, bg=C["card"])
@@ -1960,7 +1991,7 @@ class DesktopApp(tk.Tk):
         c_type = self._card(p, "4. 类型 / 分类", "视频用来筛选；分类汇总用来统计")
         self.vd_type_note = tk.Label(
             c_type,
-            text="视频时长：只跑下面这些类型。分类汇总：下面是单独统计的分类，每个分类一列。",
+            text="视频时长：未勾选按普通数量统计；勾选“按时长分类”后，按时间规则拆分成多个子列。",
             bg=C["card"],
             fg=C["muted"],
             font=FS,
@@ -1971,8 +2002,9 @@ class DesktopApp(tk.Tk):
         self.vd_type_head = tk.Frame(c_type, bg="#ecfdf5")
         self.vd_type_head.pack(fill="x", pady=(0, 2))
         tk.Label(self.vd_type_head, text="分类名称", bg="#ecfdf5", fg=C["muted"], font=FS, anchor="w").pack(side="left", fill="x", expand=True, padx=6, pady=3)
-        tk.Label(self.vd_type_head, text="计入总计数", bg="#ecfdf5", fg=C["muted"], font=FS, width=12).pack(side="left")
-        tk.Label(self.vd_type_head, text="计入逐条计数", bg="#ecfdf5", fg=C["muted"], font=FS, width=12).pack(side="left")
+        tk.Label(self.vd_type_head, text="总计数", bg="#ecfdf5", fg=C["muted"], font=FS, width=8).pack(side="left")
+        tk.Label(self.vd_type_head, text="逐条计数", bg="#ecfdf5", fg=C["muted"], font=FS, width=10).pack(side="left")
+        tk.Label(self.vd_type_head, text="按时长分类", bg="#ecfdf5", fg=C["muted"], font=FS, width=12).pack(side="left")
         tk.Label(self.vd_type_head, text="", bg="#ecfdf5", width=8).pack(side="left")
         self.vd_type_box = tk.Frame(c_type, bg=C["card"])
         self.vd_type_box.pack(fill="x")
@@ -2085,7 +2117,7 @@ class DesktopApp(tk.Tk):
         self.vd_duration_rule_wrap.pack(fill="x", pady=(8, 0))
         tk.Label(
             self.vd_duration_rule_wrap,
-            text="按时长区间统计数量：每条原视频只进入一个区间；按通过类型筛选的全部视频计数，不使用“计入总计数/逐条计数”勾选。下限表示“大于”，上限表示“不超过”；留空表示不限。",
+            text="时间规则同时用于逐条计数和勾选了“按时长分类”的分类列。每条原视频只进入一个区间；未勾选的分类只显示普通数量。下限表示“大于”，上限表示“不超过”；留空表示不限。",
             bg=C["card"],
             fg=C["muted"],
             font=FS,
@@ -2111,7 +2143,7 @@ class DesktopApp(tk.Tk):
         self.vd_report_cat_wrap.pack(fill="x", pady=(8, 0))
         tk.Label(
             self.vd_report_cat_wrap,
-            text="数据表额外分类列：按视频个数计（5 条就是 5，不按时长规则）。可留空则按第 4 节分类自动建列。",
+            text="数据表分类列：未勾选“按时长分类”时按视频个数计；勾选后按上面的时间区间展开。留空则按第 4 节分类自动建列。",
             bg=C["card"],
             fg=C["muted"],
             font=FS,
@@ -2126,6 +2158,13 @@ class DesktopApp(tk.Tk):
         self.vd_report_cat_count.pack(side="left")
         StyleBtn(rc_hint, "ghost", text="+ 添加分类列", command=self._add_vd_report_cat).pack(side="right")
         self._add_vd_report_cat()
+        self.vd_force_refresh_btn = StyleBtn(
+            c3,
+            "ghost",
+            text="强制刷新表头并汇总",
+            command=self._force_refresh_vd_header,
+        )
+        self.vd_force_refresh_btn.pack(anchor="e", pady=(8, 2))
 
         c_sched = self._card(p, "6. 定时提取", "需保持本程序开着")
         self.vd_sched_note = tk.Label(
@@ -2150,7 +2189,7 @@ class DesktopApp(tk.Tk):
         self.vd_help_note = tk.Label(
             c4,
             text="日志表：A 日期、B 链接、C 名字、D 时长(秒)、E 类型、F 备注（未识别原因）。已跑过的链接下次自动跳过。"
-            "数据表：每人两列（总计数、逐条计数），添加分类再加列；一人一色，姓名合并，人与人之间有分隔线。"
+            "数据表：普通分类显示一个数量列；勾选按时长分类后，显示分类父表头及各时间区间子列。修改配置后可强制刷新表头、数据和样式。"
             "未识别常见原因：不是视频、没有权限、Drive 还没生成时长。源表和 Drive 文件都要共享给服务账号。",
             bg=C["card"],
             fg=C["muted"],
@@ -2396,8 +2435,8 @@ class DesktopApp(tk.Tk):
         win.title("设置")
         win.configure(bg=C["paper"])
         win.transient(self)
-        win.minsize(560, 420)
-        win.geometry(f"620x480+{self.winfo_rootx() + 80}+{self.winfo_rooty() + 60}")
+        win.minsize(640, 720)
+        win.geometry(f"700x780+{self.winfo_rootx() + 60}+{self.winfo_rooty() + 20}")
         self._settings_win = win
 
         head = tk.Frame(win, bg=C["head"])
@@ -2405,7 +2444,7 @@ class DesktopApp(tk.Tk):
         tk.Label(head, text="设置", bg=C["head"], fg=C["cream"], font=FH).pack(anchor="w", padx=18, pady=(14, 2))
         tk.Label(
             head,
-            text="服务账号对所有模板共用。添加后会立即保存，下次启动仍会显示。",
+            text="服务账号给表格用。图库站点：先登录 Cloudflare，再填自己的域名，一点部署。",
             bg=C["head"],
             fg="#c9d5cc",
             font=FS,
@@ -2429,6 +2468,7 @@ class DesktopApp(tk.Tk):
             bg="#f8fffd",
             fg=C["ink"],
             highlightthickness=0,
+            height=6,
         )
         bar = ttk.Scrollbar(list_wrap, orient="vertical", command=box.yview)
         box.configure(yscrollcommand=bar.set)
@@ -2450,8 +2490,166 @@ class DesktopApp(tk.Tk):
         StyleBtn(actions, "ghost", text="+ 添加服务账号", command=self._choose_credentials).pack(side="left", padx=(0, 6))
         StyleBtn(actions, "ghost", text="复制邮箱", command=self._copy_sa).pack(side="left", padx=(0, 6))
         StyleBtn(actions, "ghost", text="移除末个", command=self._remove_last_credential).pack(side="left")
-        StyleBtn(actions, "ghost", text="关闭", command=_on_close_settings).pack(side="right")
+
+        gallery = tk.Frame(win, bg=C["card"], highlightbackground=C["line"], highlightthickness=1)
+        gallery.pack(fill="x", padx=16, pady=(0, 16))
+        tk.Label(gallery, text="图库站点（Cloudflare）", bg=C["card"], fg=C["ink"], font=FB).pack(anchor="w", padx=14, pady=(12, 4))
+        tk.Label(
+            gallery,
+            text="别人拿到软件：登录 Cloudflare → 填自己的域名 → 部署。密钥自动生成，不用去控制台手工建项目。",
+            bg=C["card"],
+            fg=C["muted"],
+            font=FS,
+            wraplength=640,
+            justify="left",
+        ).pack(anchor="w", padx=14, pady=(0, 8))
+        self.var_cf_login = tk.StringVar(value="尚未登录 Cloudflare")
+        tk.Label(gallery, textvariable=self.var_cf_login, bg=C["card"], fg=C["head"], font=FS).pack(anchor="w", padx=14)
+        login_row = tk.Frame(gallery, bg=C["card"])
+        login_row.pack(fill="x", padx=14, pady=(6, 4))
+        StyleBtn(login_row, "ghost", text="1. 登录 Cloudflare", command=self._cf_login).pack(side="left")
+        self.var_cf_host = tk.StringVar()
+        self._entry(gallery, "2. 网站域名（例如 gallery.example.com）", self.var_cf_host)
+        deploy_row = tk.Frame(gallery, bg=C["card"])
+        deploy_row.pack(fill="x", padx=14, pady=(4, 8))
+        self.btn_cf_deploy = StyleBtn(deploy_row, "primary", text="3. 生成密钥并部署", command=self._cf_deploy)
+        self.btn_cf_deploy.pack(side="left")
+        StyleBtn(deploy_row, "ghost", text="关闭", command=_on_close_settings).pack(side="right")
+        self.var_cf_deploy_status = tk.StringVar(value="")
+        tk.Label(
+            gallery,
+            textvariable=self.var_cf_deploy_status,
+            bg=C["card"],
+            fg=C["muted"],
+            font=FS,
+            wraplength=640,
+            justify="left",
+        ).pack(anchor="w", padx=14, pady=(0, 12))
+        self._refresh_cf_login_status()
         win.protocol("WM_DELETE_WINDOW", _on_close_settings)
+
+    def _refresh_cf_login_status(self) -> None:
+        state = load_cf_state()
+        if not getattr(self, "var_cf_login", None):
+            return
+        if state.get("api_token") and state.get("account_id"):
+            name = state.get("account_name") or state.get("account_id")
+            self.var_cf_login.set(f"已登录：{name}")
+        else:
+            self.var_cf_login.set("尚未登录 Cloudflare")
+        host = state.get("host") or ""
+        if host and hasattr(self, "var_cf_host") and not self.var_cf_host.get().strip():
+            self.var_cf_host.set(host)
+
+    def _cf_login(self) -> None:
+        parent = self._settings_win or self
+        webbrowser.open(TOKEN_CREATE_URL)
+        dlg = tk.Toplevel(parent)
+        dlg.title("登录 Cloudflare")
+        dlg.configure(bg=C["paper"])
+        dlg.transient(parent)
+        dlg.geometry(f"+{parent.winfo_rootx() + 40}+{parent.winfo_rooty() + 80}")
+        tk.Label(
+            dlg,
+            text="浏览器会打开 Cloudflare 令牌页。点 Create Token，权限勾选：\nPages 编辑、R2 编辑、DNS 编辑、Account 读取。\n创建后把令牌粘贴到下面。",
+            bg=C["paper"],
+            fg=C["ink"],
+            font=FS,
+            justify="left",
+        ).pack(anchor="w", padx=18, pady=(16, 8))
+        var_token = tk.StringVar()
+        entry = tk.Entry(dlg, textvariable=var_token, font=MONO, show="•", width=48, relief="solid", bd=1)
+        entry.pack(fill="x", padx=18, ipady=6)
+        entry.focus_set()
+        status = tk.StringVar(value="")
+        tk.Label(dlg, textvariable=status, bg=C["paper"], fg=C["muted"], font=FS).pack(anchor="w", padx=18, pady=6)
+
+        def save_token():
+            token = var_token.get().strip()
+            if not token:
+                status.set("请粘贴令牌")
+                return
+            try:
+                state = login_with_token(token)
+            except Exception as exc:
+                status.set(str(exc))
+                return
+            self._refresh_cf_login_status()
+            self._append_log(f"已登录 Cloudflare：{state.get('account_name') or state.get('account_id')}")
+            dlg.destroy()
+
+        btns = tk.Frame(dlg, bg=C["paper"])
+        btns.pack(fill="x", padx=18, pady=(4, 16))
+        StyleBtn(btns, "primary", text="登录", command=save_token).pack(side="left")
+        StyleBtn(btns, "ghost", text="取消", command=dlg.destroy).pack(side="left", padx=8)
+        dlg.grab_set()
+
+    def _persist_cf_publish(self, url: str, secret: str) -> None:
+        url = (url or "").strip()
+        secret = (secret or "").strip()
+        self.var_cf_url.set(url)
+        self.var_cf_secret.set(secret)
+        try:
+            cfg = load_config()
+            cfg.cf_publish_url = url
+            cfg.cf_publish_secret = secret
+            for item in cfg.ui_menus or []:
+                if not isinstance(item, dict):
+                    continue
+                settings = item.setdefault("settings", {})
+                if isinstance(settings, dict):
+                    settings["cf_publish_url"] = url
+                    settings["cf_publish_secret"] = secret
+            for item in self._menus:
+                settings = item.setdefault("settings", {})
+                settings["cf_publish_url"] = url
+                settings["cf_publish_secret"] = secret
+            save_config(cfg)
+            self.cfg.cf_publish_url = url
+            self.cfg.cf_publish_secret = secret
+        except Exception as exc:
+            self._append_log(f"保存发布地址失败：{exc}")
+
+    def _cf_deploy(self) -> None:
+        host = normalize_host(self.var_cf_host.get() if hasattr(self, "var_cf_host") else "")
+        if not host:
+            messagebox.showinfo("数据汇总工具", "请先填写网站域名，例如 gallery.example.com")
+            return
+        state = load_cf_state()
+        if not state.get("api_token"):
+            messagebox.showinfo("数据汇总工具", "请先点「登录 Cloudflare」")
+            return
+        if getattr(self, "btn_cf_deploy", None):
+            self.btn_cf_deploy.configure(state="disabled", text="部署中…")
+        self.var_cf_deploy_status.set("正在部署，请稍候…")
+
+        def work():
+            lines: list[str] = []
+
+            def log(message: str) -> None:
+                lines.append(str(message))
+                self.after(0, lambda m=str(message): self._append_log(m))
+                self.after(0, lambda m=str(message): self.var_cf_deploy_status.set(m))
+
+            try:
+                result = deploy_gallery(host, log=log)
+                self.after(0, lambda: self._persist_cf_publish(result["publish_url"], result["secret"]))
+                self.after(
+                    0,
+                    lambda: self.var_cf_deploy_status.set(
+                        f"完成。站点 {result['site_url']}  发布地址已写入第 4 步。"
+                    ),
+                )
+            except CloudflareError as exc:
+                self.after(0, lambda: self.var_cf_deploy_status.set(str(exc)))
+                self.after(0, lambda: self._append_log(str(exc)))
+            except Exception as exc:
+                self.after(0, lambda: self.var_cf_deploy_status.set(f"部署失败：{exc}"))
+                self.after(0, lambda: self._append_log(f"部署失败：{exc}"))
+            finally:
+                self.after(0, lambda: self.btn_cf_deploy.configure(state="normal", text="3. 生成密钥并部署"))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _remove_last_credential(self) -> None:
         if len(self._cred_files) <= 1:
@@ -3353,6 +3551,18 @@ class DesktopApp(tk.Tk):
             return
         self._log_n = 0
         self._append_log("视频任务已加入队列")
+        self._set_badge("排队中", C["accent"])
+
+    def _force_refresh_vd_header(self) -> None:
+        """Run one video aggregation that deliberately rebuilds report headers and styles."""
+        cfg = self._cfg_for_action()
+        cfg.vd_force_refresh_header = True
+        err = start_video_job(cfg)
+        if err:
+            messagebox.showwarning("数据汇总工具", err)
+            return
+        self._log_n = 0
+        self._append_log("已加入强制刷新任务：将重建数据表表头、数据和样式")
         self._set_badge("排队中", C["accent"])
 
     def _stop_current(self) -> None:

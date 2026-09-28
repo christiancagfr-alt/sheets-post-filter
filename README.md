@@ -1,6 +1,6 @@
 # 数据汇总工具
 
-当前版本：v1.5.6。Release 同时提供安装版 `setup.exe` 和免安装便携版 ZIP。
+当前版本：v1.5.10。Release 同时提供安装版 `setup.exe` 和免安装便携版 ZIP。
 
 左侧可配置菜单管理多套独立任务，右侧按模板完成 Google 表格筛选、合并、字段映射和视频分类汇总。
 
@@ -40,18 +40,17 @@ python app.py
 
 ## 发布到 Cloudflare
 
-原来由 Google Apps Script 导出 JSON 再推 CDN。现在可以在本工具里直推：
+图库站点代码在 `promo-site/`。完整部署流程（给人看、也给 AI 照着做）：[`promo-site/DEPLOY.md`](promo-site/DEPLOY.md)。密钥怎么填：[`Cloudflare发布密钥说明.md`](Cloudflare发布密钥说明.md)。
 
-1. 部署站点（只需一次，更新 Worker 后才能直推分片）：
+- 发到现网 `promo.zhixianglife.com`：软件第 4 步填发布地址和 `CACHE_PUBLISH_SECRET`，不必新建项目。
+- 只更新现网网页/接口：
 
 ```bash
 cd promo-site
 npx wrangler pages deploy . --project-name=q-gallery-promo --commit-dirty=true --branch=production
 ```
 
-2. 在界面第 4 步填写 `CACHE_PUBLISH_SECRET`，点 **立即发布到 Cloudflare**，或勾选「汇总后自动发布」。
-
-站点：https://test.pages.dev/  （promo.test.com）
+- 独立图库：软件 **设置 → 图库站点**，登录 Cloudflare，填自己的域名，点部署。密钥自动生成并写回第 4 步。
 
 ## 审核类型
 

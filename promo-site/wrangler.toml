@@ -1,0 +1,27 @@
+# Cloudflare Pages — 引流/点赞数据站（与素材库 q-gallery 分开部署，共用 R2）
+# Deploy:
+#   npx wrangler pages deploy . --project-name=q-gallery-promo --commit-dirty=true --branch=production
+#
+# 日更镜像到 R2（减配额）:
+#   curl -X POST https://promo.zhixianglife.com/api/publish-cache \
+#     -H "x-publish-secret: $CACHE_PUBLISH_SECRET" \
+#     -H "Content-Type: application/json" \
+#     -d "{\"manifestUrl\":\"https://drive.google.com/uc?export=download&id=...\"}"
+
+name = "q-gallery-promo"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "."
+
+# 与素材库相同 bucket：日更写 promo/*，读走 gallery-cache.zhixianglife.com
+[[r2_buckets]]
+binding = "GALLERY_CACHE"
+bucket_name = "q-gallery-json-cache"
+
+# Secrets / vars（Dashboard 或 wrangler pages secret put）:
+# ACCESS_PASSWORD
+# APPS_SCRIPT_URL
+# APPS_SCRIPT_API_SECRET
+# DRIVE_CACHE_MANIFEST_URL
+# CACHE_PUBLISH_SECRET
+# PUBLIC_CACHE_BASE=https://gallery-cache.zhixianglife.com
