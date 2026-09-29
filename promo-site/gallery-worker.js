@@ -6,7 +6,7 @@ const MANIFEST_KEY = "promo/manifest.json";
 const CHUNK_PREFIX = "promo/chunks/";
 const LAST_REFRESH_KEY = "promo/last-refresh.json";
 
-function json(data, status = 200) {
+function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
@@ -14,6 +14,7 @@ function json(data, status = 200) {
       "Cache-Control": "no-store",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "content-type, x-publish-secret, authorization",
+      ...extraHeaders,
     },
   });
 }
@@ -163,6 +164,82 @@ async function handleCdn(request, env) {
   return new Response(obj.body, { headers });
 }
 
+const AUTH_COOKIE = "q_gallery_auth";
+
+function accessPassword(env) {
+  return String(env.ACCESS_PASSWORD || "").trim();
+}
+
+function parseCookies(header) {
+  const out = {};
+  String(header || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .forEach((part) => {
+      const index = part.indexOf("=");
+      if (index === -1) out[part] = "";
+      else out[part.slice(0, index)] = decodeURIComponent(part.slice(index + 1));
+    });
+  return out;
+}
+
+async function signValue(value, env) {
+  const secret = String(env.AUTH_SECRET || env.CACHE_PUBLISH_SECRET || accessPassword(env) || "q-gallery").trim() || "q-gallery";
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(String(value || "")));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function isAuthenticated(request, env) {
+  const password = accessPassword(env);
+  if (!password) return true;
+  const cookies = parseCookies(request.headers.get("cookie") || "");
+  return cookies[AUTH_COOKIE] === (await signValue(password, env));
+}
+
+async function authCookieHeader(env, clear) {
+  if (clear) return `${AUTH_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+  const token = await signValue(accessPassword(env), env);
+  return `${AUTH_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`;
+}
+
+async function handleAuth(request, env) {
+  if (request.method === "GET") {
+    return json({ ok: true, authenticated: await isAuthenticated(request, env) });
+  }
+  if (request.method !== "POST") {
+    return json({ ok: false, error: "Method not allowed" }, 405);
+  }
+  let body = {};
+  try {
+    body = await request.json();
+  } catch {
+    body = {};
+  }
+  const action = String(body.action || "status").trim().toLowerCase();
+  if (action === "status") {
+    return json({ ok: true, authenticated: await isAuthenticated(request, env) });
+  }
+  if (action === "logout") {
+    return json({ ok: true, authenticated: false }, 200, { "Set-Cookie": await authCookieHeader(env, true) });
+  }
+  if (action === "login") {
+    const password = accessPassword(env);
+    if (!password || body.password === password) {
+      return json({ ok: true, authenticated: true }, 200, { "Set-Cookie": await authCookieHeader(env, false) });
+    }
+    return json({ ok: false, authenticated: false, error: "密码错误。" }, 401);
+  }
+  return json({ ok: false, error: "Unknown action" }, 400);
+}
+
 async function handleDriveImage(request) {
   const reqUrl = new URL(request.url);
   const raw = String(reqUrl.searchParams.get("id") || reqUrl.searchParams.get("url") || "").trim();
@@ -226,6 +303,9 @@ export default {
     }
     if (url.pathname.startsWith("/cdn/")) {
       return handleCdn(request, env);
+    }
+    if (url.pathname === "/api/auth") {
+      return handleAuth(request, env);
     }
     if (url.pathname === "/api/drive-image" && request.method === "GET") {
       return handleDriveImage(request);

@@ -26,7 +26,7 @@ npx wrangler pages deploy . --project-name=q-gallery-promo --commit-dirty=true -
 Do **not** walk them through wrangler. Tell them:
 
 1. Open 设置
-2. 登录 Cloudflare (paste API token)
+2. 登录 Cloudflare（用软件打开的令牌页创建 API Token，不要粘 Global API Key）
 3. Enter their hostname
 4. Click 生成密钥并部署
 

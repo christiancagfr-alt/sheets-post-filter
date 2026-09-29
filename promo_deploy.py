@@ -20,16 +20,30 @@ from fetch_posts import RESOURCE_DIR, SCRIPT_DIR
 
 LogFn = Callable[[str], None]
 API = "https://api.cloudflare.com/client/v4"
-TOKEN_CREATE_URL = (
-    "https://dash.cloudflare.com/profile/api-tokens"
-    "?permissionGroupKeys="
-    + urllib.parse.quote(
-        '[{"key":"pages","type":"edit"},{"key":"workers_r2_storage","type":"edit"},'
-        '{"key":"dns","type":"edit"},{"key":"account_settings","type":"read"}]'
-    )
-    + "&name="
-    + urllib.parse.quote("数据汇总工具-图库部署")
+# Cloudflare template keys: page / workers_r2 / workers_scripts (not pages / workers_r2_storage).
+# accountId=* and zoneId=all are required so the form includes all accounts and zones.
+TOKEN_PERMISSIONS = [
+    {"key": "page", "type": "edit"},
+    {"key": "workers_r2", "type": "edit"},
+    {"key": "workers_scripts", "type": "edit"},
+    {"key": "dns", "type": "edit"},
+    {"key": "account_settings", "type": "read"},
+]
+TOKEN_CREATE_URL = "https://dash.cloudflare.com/profile/api-tokens?" + urllib.parse.urlencode(
+    {
+        "permissionGroupKeys": json.dumps(TOKEN_PERMISSIONS, separators=(",", ":")),
+        "accountId": "*",
+        "zoneId": "all",
+        "name": "数据汇总工具-图库部署",
+    }
 )
+AUTH_HELP = (
+    "请重新点「登录 Cloudflare」，用软件打开的页面创建令牌。"
+    "权限需包含 Cloudflare Pages 编辑、Workers R2 Storage 编辑、"
+    "Workers Scripts 编辑、DNS 编辑、Account Settings 读取；"
+    "账号资源选全部账号，区域选全部。"
+)
+GLOBAL_KEY_RE = re.compile(r"^[0-9a-f]{37}$", re.I)
 SKIP_DIR_NAMES = {
     "functions",
     "api",
@@ -172,6 +186,23 @@ class CloudflareError(RuntimeError):
     pass
 
 
+def looks_like_global_api_key(token: str) -> bool:
+    return bool(GLOBAL_KEY_RE.fullmatch(str(token or "").strip()))
+
+
+def is_missing_resource(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(part in text for part in ("404", "not found", "does not exist", "could not find"))
+
+
+def is_auth_failure(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(
+        part in text
+        for part in ("401", "403", "authentication error", "unauthorized", "invalid token")
+    )
+
+
 class CloudflareAPI:
     def __init__(self, token: str, log: LogFn | None = None):
         self.token = str(token or "").strip()
@@ -239,13 +270,23 @@ class CloudflareAPI:
 
     @staticmethod
     def _format_error(status: int, body: str) -> str:
+        message = ""
+        code = None
         try:
             data = json.loads(body)
             errors = data.get("errors") or []
             if errors:
-                return f"Cloudflare HTTP {status}：{errors[0].get('message') or body[:300]}"
+                first = errors[0] if isinstance(errors[0], dict) else {}
+                message = str(first.get("message") or "")
+                code = first.get("code")
         except Exception:
-            pass
+            message = ""
+        detail = message or (body or "")[:300]
+        if status in (401, 403) or "authentication error" in detail.lower():
+            extra = f"（{status}{f'/{code}' if code else ''}：{detail}）" if detail else f"（HTTP {status}）"
+            return f"Cloudflare 拒绝了这个令牌{extra}。{AUTH_HELP}"
+        if message:
+            return f"Cloudflare HTTP {status}：{message}"
         return f"Cloudflare HTTP {status}：{(body or '')[:300]}"
 
     def get(self, path: str, **kw) -> Any:
@@ -272,18 +313,36 @@ class CloudflareAPI:
     def verify_token(self) -> dict[str, str]:
         accounts = self.list_accounts()
         if not accounts:
-            raise CloudflareError("这个令牌读不到任何账号。请勾选 Account Settings 读取、Pages 编辑、R2 编辑、DNS 编辑。")
+            raise CloudflareError("这个令牌读不到任何账号。" + AUTH_HELP)
         return accounts[0]
+
+    def verify_deploy_permissions(self, account_id: str) -> None:
+        try:
+            self.get(f"/accounts/{account_id}/pages/projects?per_page=1")
+        except CloudflareError as exc:
+            if is_auth_failure(exc):
+                raise CloudflareError("令牌没有 Cloudflare Pages 权限。" + AUTH_HELP) from exc
+            raise
+        try:
+            self.get(f"/accounts/{account_id}/r2/buckets")
+        except CloudflareError as exc:
+            if is_auth_failure(exc):
+                raise CloudflareError("令牌没有 R2 存储权限。" + AUTH_HELP) from exc
+            raise
 
 
 def login_with_token(token: str, account_id: str = "") -> dict[str, Any]:
+    token = str(token or "").strip()
+    if looks_like_global_api_key(token):
+        raise CloudflareError("这是 Global API Key，一键部署需要 API Token。" + AUTH_HELP)
     api = CloudflareAPI(token)
     accounts = api.list_accounts()
     if not accounts:
-        raise CloudflareError("登录失败：令牌无效或没有账号权限")
+        raise CloudflareError("登录失败：令牌无效或没有账号权限。" + AUTH_HELP)
     chosen = next((item for item in accounts if item["id"] == account_id), accounts[0])
+    api.verify_deploy_permissions(chosen["id"])
     state = {
-        "api_token": token.strip(),
+        "api_token": token,
         "account_id": chosen["id"],
         "account_name": chosen["name"],
         "accounts": accounts,
@@ -297,10 +356,18 @@ def _ensure_bucket(api: CloudflareAPI, account_id: str, bucket: str, log: LogFn)
         api.get(f"/accounts/{account_id}/r2/buckets/{bucket}")
         log(f"R2 桶已存在：{bucket}")
         return
-    except CloudflareError:
-        pass
+    except CloudflareError as exc:
+        if is_auth_failure(exc):
+            raise CloudflareError("创建 R2 桶失败：令牌没有 R2 权限。" + AUTH_HELP) from exc
+        if not is_missing_resource(exc):
+            raise
     log(f"正在创建 R2 桶 {bucket} …")
-    api.post(f"/accounts/{account_id}/r2/buckets", {"name": bucket})
+    try:
+        api.post(f"/accounts/{account_id}/r2/buckets", {"name": bucket})
+    except CloudflareError as exc:
+        if is_auth_failure(exc):
+            raise CloudflareError("创建 R2 桶失败：令牌没有 R2 权限。" + AUTH_HELP) from exc
+        raise
 
 
 def _ensure_project(api: CloudflareAPI, account_id: str, project: str, log: LogFn) -> None:
@@ -308,13 +375,33 @@ def _ensure_project(api: CloudflareAPI, account_id: str, project: str, log: LogF
         api.get(f"/accounts/{account_id}/pages/projects/{project}")
         log(f"Pages 项目已存在：{project}")
         return
-    except CloudflareError:
-        pass
+    except CloudflareError as exc:
+        if is_auth_failure(exc):
+            raise CloudflareError("创建 Pages 项目失败：令牌没有 Pages 权限。" + AUTH_HELP) from exc
+        if not is_missing_resource(exc):
+            raise
     log(f"正在创建 Pages 项目 {project} …")
-    api.post(
-        f"/accounts/{account_id}/pages/projects",
-        {"name": project, "production_branch": "production"},
+    try:
+        api.post(
+            f"/accounts/{account_id}/pages/projects",
+            {"name": project, "production_branch": "production"},
+        )
+    except CloudflareError as exc:
+        if is_auth_failure(exc):
+            raise CloudflareError("创建 Pages 项目失败：令牌没有 Pages 权限。" + AUTH_HELP) from exc
+        raise
+
+
+def pages_env_vars(secret: str, public_base: str, access_password: str = "") -> dict[str, Any]:
+    env_vars: dict[str, Any] = {
+        "CACHE_PUBLISH_SECRET": {"type": "secret_text", "value": secret},
+        "PUBLIC_CACHE_BASE": {"type": "plain_text", "value": public_base},
+    }
+    password = str(access_password or "").strip()
+    env_vars["ACCESS_PASSWORD"] = (
+        {"type": "secret_text", "value": password} if password else None
     )
+    return env_vars
 
 
 def _configure_project(
@@ -325,16 +412,14 @@ def _configure_project(
     secret: str,
     public_base: str,
     log: LogFn,
+    access_password: str = "",
 ) -> None:
     log("正在绑定 R2 并写入密钥 …")
     env_cfg = {
         "compatibility_date": "2024-11-01",
         "compatibility_flags": ["nodejs_compat"],
         "r2_buckets": {"GALLERY_CACHE": {"name": bucket}},
-        "env_vars": {
-            "CACHE_PUBLISH_SECRET": {"type": "secret_text", "value": secret},
-            "PUBLIC_CACHE_BASE": {"type": "plain_text", "value": public_base},
-        },
+        "env_vars": pages_env_vars(secret, public_base, access_password),
     }
     api.patch(
         f"/accounts/{account_id}/pages/projects/{project}",
@@ -447,6 +532,7 @@ def deploy_gallery(
     *,
     token: str = "",
     account_id: str = "",
+    access_password: str | None = None,
     log: LogFn | None = None,
 ) -> dict[str, Any]:
     """Login must already have stored a token, or pass token=."""
@@ -457,23 +543,36 @@ def deploy_gallery(
     state = load_cf_state()
     token = (token or state.get("api_token") or "").strip()
     account_id = (account_id or state.get("account_id") or "").strip()
+    if looks_like_global_api_key(token):
+        raise CloudflareError("这是 Global API Key，一键部署需要 API Token。" + AUTH_HELP)
     api = CloudflareAPI(token, log=log)
     if not account_id:
         account_id = api.verify_token()["id"]
+    log("正在检查令牌的 Pages / R2 权限 …")
+    api.verify_deploy_permissions(account_id)
     project = str(state.get("project") or slug_from_host(host))
     bucket = str(state.get("bucket") or slug_from_host(host, "gallery-json"))
     if len(bucket) < 3:
         bucket = f"{bucket}-r2"
     secret = str(state.get("secret") or "").strip() or generate_publish_secret()
+    if access_password is None:
+        access_password = str(state.get("access_password") or "")
+    access_password = str(access_password or "").strip()
     site_dir = promo_site_dir()
     worker_path = site_dir / "gallery-worker.js"
     if not worker_path.exists():
         raise CloudflareError(f"找不到部署模板：{worker_path}")
     public_base = f"https://{host}/cdn"
     log(f"使用站点目录 {site_dir}")
+    if access_password:
+        log("站点访问密码：已设置（打开网页需要输入）")
+    else:
+        log("站点访问密码：未设置（打开网页直接进入）")
     _ensure_bucket(api, account_id, bucket, log)
     _ensure_project(api, account_id, project, log)
-    _configure_project(api, account_id, project, bucket, secret, public_base, log)
+    _configure_project(
+        api, account_id, project, bucket, secret, public_base, log, access_password=access_password
+    )
     files = collect_static_files(site_dir, host)
     if not files:
         raise CloudflareError("站点目录里没有可上传的静态文件")
@@ -490,6 +589,7 @@ def deploy_gallery(
         "project": project,
         "bucket": bucket,
         "secret": secret,
+        "access_password": access_password,
         "site_url": site_url,
         "pages_url": pages_url,
         "publish_url": publish_url,
@@ -505,6 +605,7 @@ def deploy_gallery(
             "project": project,
             "bucket": bucket,
             "secret": secret,
+            "access_password": access_password,
             "publish_url": publish_url,
             "site_url": site_url,
         }

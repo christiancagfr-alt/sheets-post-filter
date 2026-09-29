@@ -11,7 +11,7 @@
 
 数据汇总工具顶部 **设置 → 图库站点**：
 
-1. 点 **登录 Cloudflare**（浏览器打开令牌页，创建后把令牌粘回软件）
+1. 点 **登录 Cloudflare**（浏览器打开令牌页，权限已预填：Pages / R2 / Workers Scripts / DNS / Account 读取；账号选全部、区域选全部。创建后把 **API Token** 粘回软件，不要粘 Global API Key）
 2. 填写自己的网站域名，例如 `gallery.example.com`
 3. 点 **生成密钥并部署**
 

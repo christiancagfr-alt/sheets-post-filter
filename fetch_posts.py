@@ -35,10 +35,16 @@ def resource_dir() -> Path:
 
 
 def data_dir() -> Path:
-    """配置、状态、密钥所在目录（exe 旁边，可写）。"""
+    """配置、状态、密钥所在目录。Windows 安装版在 exe 旁边；macOS 在 Application Support。"""
     override = os.environ.get("SHEETS_POST_FILTER_DATA_DIR", "").strip()
     if override:
-        return Path(override).expanduser().resolve()
+        path = Path(override).expanduser().resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    if sys.platform == "darwin":
+        path = Path.home() / "Library" / "Application Support" / "sheets-post-filter"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent

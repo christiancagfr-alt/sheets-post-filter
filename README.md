@@ -1,6 +1,6 @@
 # 数据汇总工具
 
-当前版本：v1.5.10。Release 同时提供安装版 `setup.exe` 和免安装便携版 ZIP。
+当前版本：v1.5.13。Release 提供 Windows 安装包 / 便携 ZIP，以及 macOS Apple Silicon / Intel 的 `.app` ZIP。
 
 左侧可配置菜单管理多套独立任务，右侧按模板完成 Google 表格筛选、合并、字段映射和视频分类汇总。
 
@@ -17,7 +17,7 @@ pip install -r requirements.txt
 
 ## 启动
 
-**本地软件（推荐）：** 双击桌面「数据汇总工具」，或 `dist\数据汇总工具\数据汇总工具.exe`。重新打包：`pack.bat`。
+**本地软件（推荐）：** Windows 双击桌面「数据汇总工具」，或运行安装包 `data-summary-tool-setup-v1.5.13.exe`。Mac 解压 `data-summary-tool-macos-arm64-v1.5.13.zip`（Apple 芯片）或 `...-macos-x86_64-...`（Intel），把「数据汇总工具.app」拖到「应用程序」；若提示无法打开，按住 Control 点图标再选打开。重新打包 Windows：`pack.bat`。
 
 源码启动：双击 `启动界面.bat`，或：
 

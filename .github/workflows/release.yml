@@ -14,6 +14,8 @@ permissions:
 jobs:
   windows-release:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,6 +25,17 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+
+      - name: Version
+        id: meta
+        shell: pwsh
+        run: |
+          $ref = $env:GITHUB_REF_NAME
+          if ($ref -like "v*") { $version = $ref.TrimStart("v") }
+          else { $version = python -c "from version import APP_VERSION; print(APP_VERSION)" }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "version $version"
 
       - name: Install dependencies
         shell: pwsh
@@ -50,7 +63,7 @@ jobs:
           Copy-Item 使用说明.txt (Join-Path $stage "使用说明.txt") -Force
           Copy-Item logo.ico (Join-Path $stage "logo.ico") -Force
           Copy-Item uninstall-template.bat (Join-Path $stage "uninstall.bat") -Force
-          $asset = "data-summary-tool-windows-$env:GITHUB_REF_NAME.zip"
+          $asset = "data-summary-tool-windows-v$env:VERSION.zip"
           $assetPath = Join-Path $PWD "release\$asset"
           Compress-Archive -Path $stage -DestinationPath $assetPath -CompressionLevel Optimal
           "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -64,27 +77,148 @@ jobs:
         id: installer
         shell: pwsh
         run: |
-          $version = $env:GITHUB_REF_NAME.TrimStart("v")
           $languageUrl = "https://raw.githubusercontent.com/jrsoftware/issrc/1ae7bf81dc0d2013235dfe4bb0b6f4e4a0b6b25c/Files/Languages/ChineseSimplified.isl"
           Invoke-WebRequest -Uri $languageUrl -OutFile installer-ChineseSimplified.isl
           $compiler = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
-          & $compiler "/DMyAppVersion=$version" installer.iss
+          & $compiler "/DMyAppVersion=$env:VERSION" installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $setup = "data-summary-tool-setup-v$version.exe"
+          $setup = "data-summary-tool-setup-v$env:VERSION.exe"
           $setupPath = Join-Path $PWD "release\$setup"
           if (-not (Test-Path -LiteralPath $setupPath)) { throw "Installer was not created: $setupPath" }
           "setup=$setup" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "setup_path=$setupPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Attest release assets
+      - name: Attest Windows assets
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
             ${{ steps.package.outputs.asset_path }}
             ${{ steps.installer.outputs.setup_path }}
 
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            release/data-summary-tool-windows-v${{ steps.meta.outputs.version }}.zip
+            release/data-summary-tool-setup-v${{ steps.meta.outputs.version }}.exe
+
+  macos-release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-13
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Ensure Tkinter
+        run: |
+          python -c "import tkinter" 2>/dev/null && echo "tkinter ok" && exit 0
+          brew install python-tk@3.12
+          echo "$(brew --prefix python@3.12)/bin" >> "$GITHUB_PATH"
+
+      - name: Version
+        id: meta
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(python -c 'from version import APP_VERSION; print(APP_VERSION)')"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "version $VERSION arch ${{ matrix.arch }}"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Run automated checks
+        run: |
+          python -m unittest discover -s tests -v
+          node --check web/static/app.js
+
+      - name: Build macOS icns
+        run: |
+          set -euo pipefail
+          SRC="web/static/logo.png"
+          ICONSET="build/app.iconset"
+          mkdir -p "$ICONSET"
+          for size in 16 32 64 128 256 512; do
+            sips -z "$size" "$size" "$SRC" --out "$ICONSET/icon_${size}x${size}.png"
+            sips -z "$((size * 2))" "$((size * 2))" "$SRC" --out "$ICONSET/icon_${size}x${size}@2x.png"
+          done
+          iconutil -c icns "$ICONSET" -o logo.icns
+
+      - name: Build macOS application
+        run: python -m PyInstaller --noconfirm --clean sheets_post_filter.spec
+
+      - name: Package macOS zip
+        run: |
+          set -euo pipefail
+          APP="dist/数据汇总工具.app"
+          test -d "$APP"
+          STAGE="release/macos"
+          mkdir -p "$STAGE"
+          cp -R "$APP" "$STAGE/"
+          cp 使用说明.txt config.example.json "$STAGE/"
+          ASSET="data-summary-tool-macos-${{ matrix.arch }}-v${VERSION}.zip"
+          ditto -c -k --keepParent "$STAGE" "release/$ASSET"
+          ls -lh "release/$ASSET"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.zip
+
+  publish-release:
+    needs: [windows-release, macos-release]
+    if: always() && needs.windows-release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
       - name: Publish GitHub Release
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME "release/${{ steps.package.outputs.asset }}" "release/${{ steps.installer.outputs.setup }}" --verify-tag --title $env:GITHUB_REF_NAME --generate-notes
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.windows-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          find artifacts -type f \( -name '*.zip' -o -name '*.exe' \) -print
+          mapfile -t FILES < <(find artifacts -type f \( -name '*.zip' -o -name '*.exe' \))
+          TAG="v${VERSION}"
+          NOTES="$(cat <<EOF
+          数据汇总工具 ${TAG}
+
+          - Windows 安装包：\`data-summary-tool-setup-v${VERSION}.exe\`
+          - Windows 便携版：\`data-summary-tool-windows-v${VERSION}.zip\`
+          - macOS Apple Silicon：\`data-summary-tool-macos-arm64-v${VERSION}.zip\`
+          - macOS Intel：\`data-summary-tool-macos-x86_64-v${VERSION}.zip\`（若本次构建成功）
+
+          Mac：解压后把「数据汇总工具.app」拖到「应用程序」。若提示无法打开，按住 Control 点图标选打开。
+          EOF
+          )"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${FILES[@]}" --clobber
+            gh release edit "$TAG" --notes "$NOTES"
+          else
+            gh release create "$TAG" "${FILES[@]}" --title "$TAG" --notes "$NOTES" --target "${GITHUB_SHA}"
+          fi

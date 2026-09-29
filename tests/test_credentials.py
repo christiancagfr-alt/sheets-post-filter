@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -63,6 +64,17 @@ class CredentialDiscoverTests(unittest.TestCase):
             data = json.loads(dest.read_text(encoding="utf-8"))
             self.assertEqual(data["credentials_files"], [str(sa.resolve())])
             self.assertEqual(data["credentials_file"], str(sa.resolve()))
+
+    def test_macos_data_dir_uses_application_support(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            with patch.object(fp.sys, "platform", "darwin"), patch.dict(
+                os.environ, {"SHEETS_POST_FILTER_DATA_DIR": ""}, clear=False
+            ), patch.object(fp.Path, "home", return_value=home):
+                path = fp.data_dir()
+            expected = home / "Library" / "Application Support" / "sheets-post-filter"
+            self.assertEqual(path, expected)
+            self.assertTrue(expected.is_dir())
 
 
 if __name__ == "__main__":

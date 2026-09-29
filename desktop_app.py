@@ -21,9 +21,14 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 # 源码版也沿用已安装版本的配置、服务账号和运行状态。这样无论通过
 # 启动脚本还是直接执行 desktop_app.py，都不会误读源码目录中的空配置。
 if not os.environ.get("SHEETS_POST_FILTER_DATA_DIR"):
-    _installed_data_dir = Path(os.environ.get("LOCALAPPDATA", "")) / "sheets-post-filter"
-    if (_installed_data_dir / "config.json").exists():
+    if sys.platform == "darwin":
+        _installed_data_dir = Path.home() / "Library" / "Application Support" / "sheets-post-filter"
+        _installed_data_dir.mkdir(parents=True, exist_ok=True)
         os.environ["SHEETS_POST_FILTER_DATA_DIR"] = str(_installed_data_dir)
+    else:
+        _installed_data_dir = Path(os.environ.get("LOCALAPPDATA", "")) / "sheets-post-filter"
+        if (_installed_data_dir / "config.json").exists():
+            os.environ["SHEETS_POST_FILTER_DATA_DIR"] = str(_installed_data_dir)
 
 from fetch_posts import (
     LOG_DIR,
@@ -95,11 +100,13 @@ C = {
     "cream": "#f0fdfa",
     "sa": "#115e59",
 }
-F = ("Microsoft YaHei UI", 10)
-FS = ("Microsoft YaHei UI", 9)
-FB = ("Microsoft YaHei UI", 11, "bold")
-FH = ("Microsoft YaHei UI", 16, "bold")
-MONO = ("Cascadia Mono", 9)
+_UI_FONT = "PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei UI"
+_MONO_FONT = "Menlo" if sys.platform == "darwin" else "Cascadia Mono"
+F = (_UI_FONT, 10)
+FS = (_UI_FONT, 9)
+FB = (_UI_FONT, 11, "bold")
+FH = (_UI_FONT, 16, "bold")
+MONO = (_MONO_FONT, 9)
 
 
 def _mutex_socket() -> socket.socket | None:
@@ -325,7 +332,7 @@ class DesktopApp(tk.Tk):
         tk.Label(head, text=title, bg=C["card"], fg=C["ink"], font=FB).pack(side="left")
         if em:
             tk.Label(head, text=em, bg=C["card"], fg=C["accent"], font=FS).pack(side="left", padx=8)
-        tk.Label(head, text="点击展开/收起", bg=C["card"], fg="#b7ae9e", font=("Microsoft YaHei UI", 8)).pack(side="right")
+        tk.Label(head, text="点击展开/收起", bg=C["card"], fg="#b7ae9e", font=(_UI_FONT, 8)).pack(side="right")
         inner = tk.Frame(box, bg=C["card"])
         if not collapsed:
             inner.pack(fill="x", padx=16, pady=(0, 14))
@@ -458,7 +465,7 @@ class DesktopApp(tk.Tk):
             text=f"版本 {APP_VERSION}",
             fg="#9bb5ab",
             bg=C["head"],
-            font=("Microsoft YaHei UI", 8),
+            font=(_UI_FONT, 8),
         ).pack(side="left")
         self.btn_update = StyleBtn(
             version_row,
@@ -2496,7 +2503,7 @@ class DesktopApp(tk.Tk):
         tk.Label(gallery, text="图库站点（Cloudflare）", bg=C["card"], fg=C["ink"], font=FB).pack(anchor="w", padx=14, pady=(12, 4))
         tk.Label(
             gallery,
-            text="别人拿到软件：登录 Cloudflare → 填自己的域名 → 部署。密钥自动生成，不用去控制台手工建项目。",
+            text="别人拿到软件：登录 Cloudflare → 填自己的域名 → 部署。密钥自动生成，不用去控制台手工建项目。登录时请用软件打开的令牌页，不要粘贴 Global API Key。",
             bg=C["card"],
             fg=C["muted"],
             font=FS,
@@ -2510,6 +2517,13 @@ class DesktopApp(tk.Tk):
         StyleBtn(login_row, "ghost", text="1. 登录 Cloudflare", command=self._cf_login).pack(side="left")
         self.var_cf_host = tk.StringVar()
         self._entry(gallery, "2. 网站域名（例如 gallery.example.com）", self.var_cf_host)
+        self.var_cf_access_password = tk.StringVar()
+        self._entry(
+            gallery,
+            "访问密码（本机可查看；留空=打开网页不用密码。改完请再点部署）",
+            self.var_cf_access_password,
+            show="•",
+        )
         deploy_row = tk.Frame(gallery, bg=C["card"])
         deploy_row.pack(fill="x", padx=14, pady=(4, 8))
         self.btn_cf_deploy = StyleBtn(deploy_row, "primary", text="3. 生成密钥并部署", command=self._cf_deploy)
@@ -2540,6 +2554,8 @@ class DesktopApp(tk.Tk):
         host = state.get("host") or ""
         if host and hasattr(self, "var_cf_host") and not self.var_cf_host.get().strip():
             self.var_cf_host.set(host)
+        if hasattr(self, "var_cf_access_password") and not self.var_cf_access_password.get():
+            self.var_cf_access_password.set(str(state.get("access_password") or ""))
 
     def _cf_login(self) -> None:
         parent = self._settings_win or self
@@ -2551,7 +2567,7 @@ class DesktopApp(tk.Tk):
         dlg.geometry(f"+{parent.winfo_rootx() + 40}+{parent.winfo_rooty() + 80}")
         tk.Label(
             dlg,
-            text="浏览器会打开 Cloudflare 令牌页。点 Create Token，权限勾选：\nPages 编辑、R2 编辑、DNS 编辑、Account 读取。\n创建后把令牌粘贴到下面。",
+            text="浏览器会打开 Cloudflare 令牌页（权限已预填）。\n确认包含：Pages 编辑、R2 编辑、Workers Scripts 编辑、\nDNS 编辑、Account 读取；账号选全部、区域选全部。\n点 Create Token 后，把 API Token 粘贴到下面（不要粘 Global API Key）。",
             bg=C["paper"],
             fg=C["ink"],
             font=FS,
@@ -2632,7 +2648,10 @@ class DesktopApp(tk.Tk):
                 self.after(0, lambda m=str(message): self.var_cf_deploy_status.set(m))
 
             try:
-                result = deploy_gallery(host, log=log)
+                password = ""
+                if hasattr(self, "var_cf_access_password"):
+                    password = self.var_cf_access_password.get().strip()
+                result = deploy_gallery(host, access_password=password, log=log)
                 self.after(0, lambda: self._persist_cf_publish(result["publish_url"], result["secret"]))
                 self.after(
                     0,

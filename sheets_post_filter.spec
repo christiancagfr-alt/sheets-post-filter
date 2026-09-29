@@ -96,3 +96,22 @@ coll = COLLECT(
     upx_exclude=[],
     name="数据汇总工具",
 )
+
+if sys.platform == "darwin":
+    from version import APP_VERSION
+
+    icon_file = "logo.icns" if Path("logo.icns").exists() else "logo.ico"
+    app = BUNDLE(
+        coll,
+        name="数据汇总工具.app",
+        icon=icon_file,
+        bundle_identifier="com.secure-artifacts.sheets-post-filter",
+        info_plist={
+            "CFBundleName": "数据汇总工具",
+            "CFBundleDisplayName": "数据汇总工具",
+            "CFBundleShortVersionString": APP_VERSION,
+            "CFBundleVersion": APP_VERSION,
+            "NSHighResolutionCapable": True,
+            "LSApplicationCategoryType": "public.app-category.utilities",
+        },
+    )
