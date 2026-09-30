@@ -13,12 +13,14 @@ from promo_deploy import (  # noqa: E402
     TOKEN_CREATE_URL,
     TOKEN_PERMISSIONS,
     generate_publish_secret,
+    known_gallery_sites,
     is_auth_failure,
     is_missing_resource,
     looks_like_global_api_key,
     normalize_host,
     pages_env_vars,
     pages_file_hash,
+    resolve_gallery_resources,
     rewrite_gallery_html,
     slug_from_host,
 )
@@ -90,6 +92,54 @@ class PromoDeployHelperTests(unittest.TestCase):
         cleared = pages_env_vars("pub-secret", "https://example.com/cdn", "")
         self.assertIsNone(cleared["ACCESS_PASSWORD"])
         self.assertEqual(cleared["CACHE_PUBLISH_SECRET"]["value"], "pub-secret")
+
+    def test_new_domain_gets_its_own_project_and_secret(self):
+        state = {
+            "host": "sucai.boxlane47281.website",
+            "project": "gallery-sucai-boxlane47281-website",
+            "bucket": "gallery-json-sucai-boxlane47281-website",
+            "secret": "old-site-secret-value",
+        }
+        first = resolve_gallery_resources("sucai.boxlane47281.website", state)
+        self.assertTrue(first["reused"])
+        self.assertEqual(first["project"], "gallery-sucai-boxlane47281-website")
+        self.assertEqual(first["secret"], "old-site-secret-value")
+        second = resolve_gallery_resources("gallery.example.com", state)
+        self.assertFalse(second["reused"])
+        self.assertEqual(second["project"], "gallery-gallery-example-com")
+        self.assertNotEqual(second["bucket"], state["bucket"])
+        self.assertNotEqual(second["secret"], state["secret"])
+        self.assertNotIn(second["project"], {"q-gallery", "q-gallery-promo"})
+        self.assertNotIn(second["bucket"], {"q-gallery-json-cache"})
+
+    def test_promo_hostname_does_not_reuse_production_project_name(self):
+        resources = resolve_gallery_resources("promo.zhixianglife.com", {})
+        self.assertEqual(resources["project"], "gallery-promo-zhixianglife-com")
+        self.assertNotEqual(resources["project"], "q-gallery-promo")
+        self.assertNotEqual(resources["bucket"], "q-gallery-json-cache")
+
+    def test_known_sites_keep_previous_host_secrets(self):
+        state = {
+            "host": "b.example.com",
+            "project": "gallery-b-example-com",
+            "bucket": "gallery-json-b-example-com",
+            "secret": "secret-b",
+            "sites": [
+                {
+                    "host": "a.example.com",
+                    "project": "gallery-a-example-com",
+                    "bucket": "gallery-json-a-example-com",
+                    "secret": "secret-a",
+                    "publish_url": "https://a.example.com/api/publish-cache",
+                }
+            ],
+        }
+        hosts = {item["host"]: item["secret"] for item in known_gallery_sites(state)}
+        self.assertEqual(hosts["a.example.com"], "secret-a")
+        self.assertEqual(hosts["b.example.com"], "secret-b")
+        restored = resolve_gallery_resources("a.example.com", state)
+        self.assertTrue(restored["reused"])
+        self.assertEqual(restored["secret"], "secret-a")
 
 
 if __name__ == "__main__":

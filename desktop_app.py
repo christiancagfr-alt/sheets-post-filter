@@ -80,6 +80,7 @@ from promo_deploy import (
     TOKEN_CREATE_URL,
     CloudflareError,
     deploy_gallery,
+    known_gallery_sites,
     load_cf_state,
     login_with_token,
     normalize_host,
@@ -856,6 +857,8 @@ class DesktopApp(tk.Tk):
             return
         source = next((item for item in self._menus if item["template"] == template), None)
         settings = copy.deepcopy(source.get("settings") if source else self._payload())
+        settings["cf_publish_url"] = ""
+        settings["cf_publish_secret"] = ""
         if template in ("video", "custom"):
             settings["vd_write_log"] = template == "video"
             settings.setdefault("vd_types", [])
@@ -2503,7 +2506,7 @@ class DesktopApp(tk.Tk):
         tk.Label(gallery, text="图库站点（Cloudflare）", bg=C["card"], fg=C["ink"], font=FB).pack(anchor="w", padx=14, pady=(12, 4))
         tk.Label(
             gallery,
-            text="别人拿到软件：登录 Cloudflare → 填自己的域名 → 部署。密钥自动生成，不用去控制台手工建项目。登录时请用软件打开的令牌页，不要粘贴 Global API Key。",
+            text="部署结果只写入左侧当前选中的模板第 4 步。要给新模板单独一座站：先新增并点选该模板，再换域名部署。换回旧域名后点「填入此域名的密钥」，会把以前缓存的地址和密钥写回当前模板。旧模板不会被改掉。",
             bg=C["card"],
             fg=C["muted"],
             font=FS,
@@ -2528,6 +2531,9 @@ class DesktopApp(tk.Tk):
         deploy_row.pack(fill="x", padx=14, pady=(4, 8))
         self.btn_cf_deploy = StyleBtn(deploy_row, "primary", text="3. 生成密钥并部署", command=self._cf_deploy)
         self.btn_cf_deploy.pack(side="left")
+        StyleBtn(deploy_row, "ghost", text="填入此域名的密钥", command=self._restore_cf_site_for_host).pack(
+            side="left", padx=(8, 0)
+        )
         StyleBtn(deploy_row, "ghost", text="关闭", command=_on_close_settings).pack(side="right")
         self.var_cf_deploy_status = tk.StringVar(value="")
         tk.Label(
@@ -2556,6 +2562,40 @@ class DesktopApp(tk.Tk):
             self.var_cf_host.set(host)
         if hasattr(self, "var_cf_access_password") and not self.var_cf_access_password.get():
             self.var_cf_access_password.set(str(state.get("access_password") or ""))
+        remembered = known_gallery_sites(state)
+        if remembered and hasattr(self, "var_cf_deploy_status") and not self.var_cf_deploy_status.get():
+            hosts = "、".join(item.get("host") or "" for item in remembered if item.get("host"))
+            self.var_cf_deploy_status.set(f"已记住的站点：{hosts}。当前会写入模板「{self._active_menu_name()}」。")
+
+    def _active_menu_name(self) -> str:
+        item = next((entry for entry in self._menus if entry.get("id") == self._active_menu_id), None)
+        return str((item or {}).get("name") or "当前模板")
+
+    def _lookup_cf_site(self, host: str) -> dict:
+        host = normalize_host(host)
+        if not host:
+            return {}
+        return next((item for item in known_gallery_sites(load_cf_state()) if item.get("host") == host), {}) or {}
+
+    def _restore_cf_site_for_host(self) -> None:
+        host = ""
+        if hasattr(self, "var_cf_host"):
+            host = self.var_cf_host.get()
+        site = self._lookup_cf_site(host)
+        if not site:
+            messagebox.showinfo(
+                "数据汇总工具",
+                "这个域名还没有部署记录。先点「生成密钥并部署」会新建站点，并写入当前选中的模板。",
+            )
+            return
+        url = str(site.get("publish_url") or "").strip() or f"https://{site.get('host')}/api/publish-cache"
+        secret = str(site.get("secret") or "").strip()
+        self._persist_cf_publish(url, secret)
+        name = self._active_menu_name()
+        msg = f"已把 {site.get('host')} 的发布地址和密钥写回模板「{name}」第 4 步。"
+        if hasattr(self, "var_cf_deploy_status"):
+            self.var_cf_deploy_status.set(msg)
+        self._append_log(msg)
 
     def _cf_login(self) -> None:
         parent = self._settings_win or self
@@ -2609,17 +2649,15 @@ class DesktopApp(tk.Tk):
             cfg = load_config()
             cfg.cf_publish_url = url
             cfg.cf_publish_secret = secret
-            for item in cfg.ui_menus or []:
-                if not isinstance(item, dict):
-                    continue
-                settings = item.setdefault("settings", {})
-                if isinstance(settings, dict):
-                    settings["cf_publish_url"] = url
-                    settings["cf_publish_secret"] = secret
-            for item in self._menus:
-                settings = item.setdefault("settings", {})
-                settings["cf_publish_url"] = url
-                settings["cf_publish_secret"] = secret
+            active = self._active_menu_id
+            for collection in (cfg.ui_menus or [], self._menus):
+                for item in collection:
+                    if not isinstance(item, dict) or item.get("id") != active:
+                        continue
+                    settings = item.setdefault("settings", {})
+                    if isinstance(settings, dict):
+                        settings["cf_publish_url"] = url
+                        settings["cf_publish_secret"] = secret
             save_config(cfg)
             self.cfg.cf_publish_url = url
             self.cfg.cf_publish_secret = secret
@@ -2653,10 +2691,11 @@ class DesktopApp(tk.Tk):
                     password = self.var_cf_access_password.get().strip()
                 result = deploy_gallery(host, access_password=password, log=log)
                 self.after(0, lambda: self._persist_cf_publish(result["publish_url"], result["secret"]))
+                menu_name = self._active_menu_name()
                 self.after(
                     0,
                     lambda: self.var_cf_deploy_status.set(
-                        f"完成。站点 {result['site_url']}  发布地址已写入第 4 步。"
+                        f"完成。站点 {result['site_url']} 已写入模板「{menu_name}」第 4 步。"
                     ),
                 )
             except CloudflareError as exc:

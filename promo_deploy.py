@@ -122,6 +122,70 @@ def slug_from_host(host: str, prefix: str = "gallery") -> str:
     return slug
 
 
+RESERVED_PAGES_PROJECTS = {"q-gallery", "q-gallery-promo"}
+RESERVED_R2_BUCKETS = {"q-gallery-json-cache"}
+
+
+def _safe_resource_slug(host: str, prefix: str, reserved: set[str]) -> str:
+    slug = slug_from_host(host, prefix)
+    if slug in reserved:
+        slug = f"{slug}-site"
+        if len(slug) > 58:
+            slug = slug[:58].rstrip("-")
+    return slug
+
+
+def known_gallery_sites(state: dict[str, Any] | None) -> list[dict[str, Any]]:
+    state = state or {}
+    sites: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    rows = list(state.get("sites") or [])
+    rows.append(state)
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        host = normalize_host(item.get("host") or "")
+        project = str(item.get("project") or "").strip()
+        if not host or not project or host in seen:
+            continue
+        seen.add(host)
+        sites.append(
+            {
+                "host": host,
+                "project": project,
+                "bucket": str(item.get("bucket") or "").strip(),
+                "secret": str(item.get("secret") or "").strip(),
+                "publish_url": str(item.get("publish_url") or "").strip(),
+                "site_url": str(item.get("site_url") or "").strip(),
+            }
+        )
+    return sites
+
+
+def resolve_gallery_resources(host: str, state: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Same hostname updates that site. A different hostname gets a new project and bucket."""
+    host = normalize_host(host)
+    previous = next((item for item in known_gallery_sites(state) if item["host"] == host), None)
+    if previous and previous.get("project") and previous.get("bucket"):
+        return {
+            "host": host,
+            "project": previous["project"],
+            "bucket": previous["bucket"],
+            "secret": previous.get("secret") or generate_publish_secret(),
+            "reused": True,
+        }
+    bucket = _safe_resource_slug(host, "gallery-json", RESERVED_R2_BUCKETS)
+    if len(bucket) < 3:
+        bucket = f"{bucket}-r2"
+    return {
+        "host": host,
+        "project": _safe_resource_slug(host, "gallery", RESERVED_PAGES_PROJECTS),
+        "bucket": bucket,
+        "secret": generate_publish_secret(),
+        "reused": False,
+    }
+
+
 def generate_publish_secret() -> str:
     return secrets.token_urlsafe(32)
 
@@ -550,11 +614,14 @@ def deploy_gallery(
         account_id = api.verify_token()["id"]
     log("正在检查令牌的 Pages / R2 权限 …")
     api.verify_deploy_permissions(account_id)
-    project = str(state.get("project") or slug_from_host(host))
-    bucket = str(state.get("bucket") or slug_from_host(host, "gallery-json"))
-    if len(bucket) < 3:
-        bucket = f"{bucket}-r2"
-    secret = str(state.get("secret") or "").strip() or generate_publish_secret()
+    resources = resolve_gallery_resources(host, state)
+    project = resources["project"]
+    bucket = resources["bucket"]
+    secret = resources["secret"]
+    if resources["reused"]:
+        log(f"同一域名，更新已有站点：Pages {project} / R2 {bucket}")
+    else:
+        log(f"新域名，新建独立站点：Pages {project} / R2 {bucket}（不会覆盖已有图库）")
     if access_password is None:
         access_password = str(state.get("access_password") or "")
     access_password = str(access_password or "").strip()
@@ -597,6 +664,16 @@ def deploy_gallery(
         "deployment_id": str(deployment.get("id") or ""),
         "deployment_url": str(deployment.get("url") or pages_url),
     }
+    site_entry = {
+        "host": host,
+        "project": project,
+        "bucket": bucket,
+        "secret": secret,
+        "publish_url": publish_url,
+        "site_url": site_url,
+    }
+    sites = [item for item in known_gallery_sites(state) if item.get("host") != host]
+    sites.append(site_entry)
     save_cf_state(
         {
             "api_token": token,
@@ -608,6 +685,7 @@ def deploy_gallery(
             "access_password": access_password,
             "publish_url": publish_url,
             "site_url": site_url,
+            "sites": sites,
         }
     )
     log(f"部署完成：{site_url}")
