@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 
 const templateNames = {
-  filter: "贴文筛选汇总",
+  filter: "数据筛选汇总",
   catalog: "目录表驱动汇总",
   align: "字段映射 / 表头对齐",
   video: "视频提取时长",
@@ -191,9 +191,9 @@ function updateCounts() {
 function addFieldRow(item = {}) {
   const row = document.createElement("div");
   row.className = "field-row";
-  row.innerHTML = `<input class="f-name" type="text" placeholder="字段名" /><input class="f-sheet" type="text" placeholder="当月贴文库" /><input class="f-range" type="text" placeholder="AB2:AB" /><button class="ghost src-del" type="button">删除</button>`;
+  row.innerHTML = `<input class="f-name" type="text" placeholder="字段名" /><input class="f-sheet" type="text" placeholder="源数据" /><input class="f-range" type="text" placeholder="AB2:AB" /><button class="ghost src-del" type="button">删除</button>`;
   row.querySelector(".f-name").value = item.name || "";
-  row.querySelector(".f-sheet").value = item.sheet || "当月贴文库";
+  row.querySelector(".f-sheet").value = item.sheet || "源数据";
   row.querySelector(".f-range").value = item.range || "";
   row.querySelector("button").addEventListener("click", () => { row.remove(); if (!$("fieldRows").children.length) addFieldRow(); updateCounts(); });
   $("fieldRows").appendChild(row);

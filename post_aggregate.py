@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""贴文汇总：按数据列表里的表格链接读取「订阅」表，对照贴文库后写入整合表。"""
+"""多表汇总：按数据列表里的表格链接读取明细表，对照后写入整合表。"""
 
 from __future__ import annotations
 
@@ -124,7 +124,7 @@ def build_lookup_map(rows: list[list[Any]], key_col: str, value_col: str, skip_h
     key_idx = _letter_index(key_col)
     value_idx = _letter_index(value_col)
     if key_idx < 0 or value_idx < 0:
-        raise RuntimeError("贴文库对照的查找列和取值列必须填字母，例如 B、N")
+        raise RuntimeError("对照表查找列和取值列必须填字母，例如 B、N")
     mapping: dict[str, str] = {}
     body = rows[1:] if skip_header and rows else rows
     for row in body:
@@ -173,10 +173,10 @@ def rows_from_subscription(
 
 
 def library_state(rows: list[list[Any]], key_col: str) -> tuple[set[str], int]:
-    """Existing keys in the 贴文库 key column, and the next empty 1-based row."""
+    """Existing keys in the 对照表 key column, and the next empty 1-based row."""
     key_idx = _letter_index(key_col)
     if key_idx < 0:
-        raise RuntimeError("贴文库排重列必须填字母，例如 B")
+        raise RuntimeError("对照表排重列必须填字母，例如 B")
     keys: set[str] = set()
     last = 1
     for index, row in enumerate(rows):
@@ -221,7 +221,7 @@ def collect_match_values(
 
 
 def pick_new_library_values(candidates: list[str], existing: set[str]) -> tuple[list[str], int]:
-    """Keep first-seen values that are not already in 贴文库 B."""
+    """Keep first-seen values that are not already in 对照表 B."""
     out: list[str] = []
     seen = set(existing)
     skipped = 0
@@ -240,7 +240,7 @@ def pick_new_library_values(candidates: list[str], existing: set[str]) -> tuple[
 def build_library_append_rows(values: list[str], write_col: str) -> list[list[str]]:
     write_idx = _letter_index(write_col)
     if write_idx < 0:
-        raise RuntimeError("贴文库写入列必须填字母，例如 B")
+        raise RuntimeError("对照表写入列必须填字母，例如 B")
     rows: list[list[str]] = []
     for value in values:
         row = [""] * write_idx
@@ -307,7 +307,7 @@ def _insert_matrix(ws, start_row: int, payload: list[list[Any]], log: LogFn) -> 
             log=log,
         )
     except RuntimeError as exc:
-        raise RuntimeError("贴文库单元格超过上限，已有数据不会清掉。请换空表或删掉空白列后再插入。") from exc
+        raise RuntimeError("对照表单元格超过上限，已有数据不会清掉。请换空表或删掉空白列后再插入。") from exc
     sheet_id = ws.id
     for offset in range(0, len(payload), WRITE_BATCH):
         chunk = payload[offset : offset + WRITE_BATCH]
@@ -333,8 +333,8 @@ def _insert_matrix(ws, start_row: int, payload: list[list[Any]], log: LogFn) -> 
             )
             ws.update(range_name=f"A{row0}", values=chunk, value_input_option="USER_ENTERED")
 
-        with_retry(_do, log=log, what=f"贴文库从第 {row0} 行插入 {len(chunk)} 行")
-        log(f"  贴文库已从第 {start_row} 行插入 {min(offset + len(chunk), len(payload))} / {len(payload)} 行")
+        with_retry(_do, log=log, what=f"对照表从第 {row0} 行插入 {len(chunk)} 行")
+        log(f"  对照表已从第 {start_row} 行插入 {min(offset + len(chunk), len(payload))} / {len(payload)} 行")
 
 
 def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any]:
@@ -346,7 +346,7 @@ def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
     link_col = str(getattr(cfg, "pa_link_col", "K") or "K").strip().upper() or "K"
     tag_col = str(getattr(cfg, "pa_tag_col", "L") or "L").strip().upper()
     start_row = max(1, int(getattr(cfg, "pa_start_row", 2) or 2))
-    sub_sheet = str(getattr(cfg, "pa_sub_sheet", "") or "订阅").strip() or "订阅"
+    sub_sheet = str(getattr(cfg, "pa_sub_sheet", "") or "明细").strip() or "明细"
     source_cols = _parse_col_list(getattr(cfg, "pa_source_cols", None)) or list(DEFAULT_SOURCE_COLS)
     date_col = str(getattr(cfg, "pa_date_col", "M") or "M").strip().upper() or "M"
     date_filter_on = bool(getattr(cfg, "pa_date_filter_enabled", True))
@@ -355,7 +355,7 @@ def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
     include_tag = bool(getattr(cfg, "pa_include_tag", True)) and bool(tag_col)
     lookup_enabled = bool(getattr(cfg, "pa_lookup_enabled", True))
     lookup_url = str(getattr(cfg, "pa_lookup_url", "") or "").strip()
-    lookup_sheet = str(getattr(cfg, "pa_lookup_sheet", "") or "当月贴文库").strip() or "当月贴文库"
+    lookup_sheet = str(getattr(cfg, "pa_lookup_sheet", "") or "对照表").strip() or "对照表"
     lookup_key_col = str(getattr(cfg, "pa_lookup_key_col", "B") or "B").strip().upper() or "B"
     lookup_value_col = str(getattr(cfg, "pa_lookup_value_col", "N") or "N").strip().upper() or "N"
     match_col = str(getattr(cfg, "pa_match_col", "J") or "J").strip().upper() or "J"
@@ -389,9 +389,9 @@ def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
     entries = collect_list_entries(list_rows, link_col, tag_col, start_row, hyperlinks)
     if not entries:
         raise RuntimeError(f"数据列表「{list_sheet}」的 {link_col} 列没有读到表格链接")
-    log(f"数据列表读到 {len(entries)} 个订阅表链接")
+    log(f"数据列表读到 {len(entries)} 个明细表链接")
     if date_filter_on and (start_d or end_d):
-        log(f"日期筛选：{start_d or '…'} ~ {end_d or '…'}（订阅表 {date_col} 列）")
+        log(f"日期筛选：{start_d or '…'} ~ {end_d or '…'}（明细表 {date_col} 列）")
 
     lookup: dict[str, str] = {}
     lookup_ws = None
@@ -400,18 +400,18 @@ def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
     library_next_row = 2
     if lookup_enabled or write_library:
         if not lookup_url:
-            raise RuntimeError("请填写贴文库表格链接（对照或追加新链接都需要）")
+            raise RuntimeError("请填写对照表表格链接（对照或追加新链接都需要）")
         lookup_ss = open_by_url_or_id(gc, lookup_url, log=log)
         lookup_ws = pick_source_ws(lookup_ss, lookup_sheet)
-        log(f"读取贴文库「{lookup_ss.title}」/「{lookup_ws.title}」")
+        log(f"读取对照表「{lookup_ss.title}」/「{lookup_ws.title}」")
         lookup_rows = read_sheet_values(lookup_ws, log=log)
         existing_library_keys, library_next_row = library_state(lookup_rows, lookup_key_col)
         if lookup_enabled:
             lookup = build_lookup_map(lookup_rows, lookup_key_col, lookup_value_col)
-            log(f"贴文库对照 {len(lookup)} 条（{lookup_key_col} 列）")
+            log(f"对照表查找 {len(lookup)} 条（{lookup_key_col} 列）")
         if write_library:
             log(
-                f"贴文库 {lookup_key_col} 列已有 {len(existing_library_keys)} 条，"
+                f"对照表 {lookup_key_col} 列已有 {len(existing_library_keys)} 条，"
                 f"新链接从第 {library_start_row} 行插入，原有数据下移"
             )
 
@@ -425,7 +425,7 @@ def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
     for number, item in enumerate(entries, 1):
         if cancelled and cancelled():
             raise RuntimeError("已停止")
-        log(f"[{number}/{len(entries)}] 读取订阅表 {item['url']}")
+        log(f"[{number}/{len(entries)}] 读取明细表 {item['url']}")
         rec = {"url": item["url"], "tag": item["tag"], "rows": 0, "error": None}
         try:
             source_ss = open_by_url_or_id(gc, item["url"], log=log)
@@ -464,7 +464,7 @@ def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
                         log=log,
                     )
                 except Exception as exc:
-                    log(f"读取订阅表 {match_col} 列超链接失败，改用单元格文字：{exc}")
+                    log(f"读取明细表 {match_col} 列超链接失败，改用单元格文字：{exc}")
                 library_candidates.extend(
                     collect_match_values(
                         values,
@@ -484,7 +484,7 @@ def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
         except Exception as exc:
             fail_n += 1
             rec["error"] = str(exc)
-            log(f"[{number}/{len(entries)}] 无法读取订阅表，已跳过：{exc}")
+            log(f"[{number}/{len(entries)}] 无法读取明细表，已跳过：{exc}")
         sources.append(rec)
 
     headers = output_headers(source_cols, include_tag, lookup_enabled)
@@ -503,7 +503,7 @@ def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
         new_vals, library_skipped = pick_new_library_values(library_candidates, existing_library_keys)
         library_added = len(new_vals)
         log(
-            f"贴文库排重：订阅表 {match_col} 列对照 {lookup_key_col} 列，"
+            f"对照表排重：明细表 {match_col} 列对照 {lookup_key_col} 列，"
             f"已有跳过 {library_skipped}，待插入 {library_added}"
         )
         if new_vals:
@@ -514,16 +514,16 @@ def run_post_aggregate(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any
             )
             _insert_matrix(lookup_ws, library_start_row, append_rows, log)
         else:
-            log("贴文库没有新链接需要插入")
-    log("======== 贴文汇总已结束 ========")
+            log("对照表没有新链接需要插入")
+    log("======== 多表汇总已结束 ========")
     log(f"整合表写入：{len(aggregated)} 行 × {len(headers)} 列")
-    log(f"贴文库从第 {library_start_row} 行插入：{library_added} 行（已有跳过 {library_skipped}）")
-    log(f"订阅表：成功 {ok_n} 个 · 失败 {fail_n} 个 · 日期外 {skipped_date} 行")
+    log(f"对照表从第 {library_start_row} 行插入：{library_added} 行（已有跳过 {library_skipped}）")
+    log(f"明细表：成功 {ok_n} 个 · 失败 {fail_n} 个 · 日期外 {skipped_date} 行")
     log(f"整合表：「{target_ss.title}」/「{output_sheet}」")
     if write_library and lookup_ws is not None:
-        log(f"贴文库：「{getattr(lookup_ss, 'title', '')}」/「{lookup_ws.title}」")
+        log(f"对照表：「{getattr(lookup_ss, 'title', '')}」/「{lookup_ws.title}」")
     log(
-        f"贴文汇总已结束：整合表 {len(aggregated)} 行，贴文库新增 {library_added} 行，成功 {ok_n} 个订阅表。"
+        f"多表汇总已结束：整合表 {len(aggregated)} 行，对照表新增 {library_added} 行，成功 {ok_n} 个明细表。"
     )
     return {
         "ok": True,

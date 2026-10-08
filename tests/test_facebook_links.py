@@ -42,10 +42,10 @@ class FacebookPostUrlTests(unittest.TestCase):
 
     def test_backfills_only_blank_identity_cells(self):
         fields = [
-            FieldMap("贴文原始链接", "当月贴文库", "B", 2),
-            FieldMap("贴文id", "当月贴文库", "D", 2),
-            FieldMap("贴文链接", "当月贴文库", "G", 2),
-            FieldMap("专页ID-链接里的ID", "当月贴文库", "P", 2),
+            FieldMap("原始链接", "源数据", "B", 2),
+            FieldMap("帖文id", "源数据", "D", 2),
+            FieldMap("帖子链接", "源数据", "G", 2),
+            FieldMap("主页id", "源数据", "P", 2),
         ]
         rows = [[
             "https://fb.com/groups/107571649019326/posts/1038161605960321",

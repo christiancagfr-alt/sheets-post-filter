@@ -44,7 +44,7 @@ HEADER_TO_ASSET = {
     "来源渠道": "sourceChannel",
 }
 
-# 表头别名 → 规范字段名（图片分析 可能没有中文表头）
+# 表头别名 → 规范字段名（结果表可能没有中文表头）
 HEADER_ALIASES = {
     "名字": "名字",
     "名称": "名字",
@@ -197,7 +197,7 @@ def split_sheet_for_publish(
     start_row: int,
     include_headers: bool,
 ) -> tuple[list[str], list[list[Any]], str, int]:
-    """起始行可能是表头，也可能直接是数据（图片分析从第 3 行起、不写表头）。"""
+    """起始行可能是表头，也可能直接是数据（结果表可能从第 3 行起、不写表头）。"""
     start = max(1, int(start_row or 1))
     if len(values) < start:
         raise RuntimeError("目标表没有数据可发布")

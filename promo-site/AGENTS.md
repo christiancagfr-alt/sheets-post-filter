@@ -5,21 +5,23 @@ Canonical human+AI procedure: **[DEPLOY.md](./DEPLOY.md)**. Read it before any C
 ## Stop if
 
 - User only needs Google Sheets aggregation → no deploy; they add a service-account JSON in the desktop app Settings.
-- User wants to publish into the existing gallery `promo.zhixianglife.com` → no new project; they fill `https://promo.zhixianglife.com/api/publish-cache` + existing `CACHE_PUBLISH_SECRET`. Publishing overwrites that site.
+- User wants to publish into an existing gallery → no new project; they fill `https://gallery.example.com/api/publish-cache` (their real host) plus the existing publish secret. Publishing overwrites that site.
 
 ## Never
 
-- Deploy this folder to Pages project `q-gallery`.
-- Reuse bucket `q-gallery-json-cache` or project `q-gallery-promo` for a third-party independent gallery.
+- Deploy this folder onto another live Pages project that already serves a different site.
+- Reuse another site's R2 bucket or Pages project for a third-party independent gallery.
 - Rename binding `GALLERY_CACHE`.
 - Commit secrets.
 
-## Track A (this owner's site)
+## Track A (update an existing site the user already owns)
 
 ```bash
 cd promo-site
-npx wrangler pages deploy . --project-name=q-gallery-promo --commit-dirty=true --branch=production
+npx wrangler pages deploy . --project-name=<EXISTING_PROJECT> --commit-dirty=true --branch=production
 ```
+
+Replace `<EXISTING_PROJECT>` with the user's Pages project name. Do not invent a new project.
 
 ## Preferred for other people using the desktop app
 
@@ -27,7 +29,7 @@ Do **not** walk them through wrangler. Tell them:
 
 1. Open 设置
 2. 登录 Cloudflare（用软件打开的令牌页创建 API Token，不要粘 Global API Key）
-3. Enter their hostname
+3. Enter their hostname, for example `gallery.example.com`
 4. Click 生成密钥并部署
 
 The app generates the secret, rewrites CDN URLs, creates R2 + Pages, and fills 发布地址.

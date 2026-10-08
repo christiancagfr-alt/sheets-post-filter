@@ -488,7 +488,7 @@ async function syncSharedCacheSnapshot(quiet = false) {
         appendStatusLog(msg || "Apps Script cache unavailable");
         if (/未登录|Unauthorized|401|需要访问密码|Unauthorized/i.test(msg)) {
           appendStatusLog(
-            "Apps Script 鉴权失败：请确认 Cloudflare 的 APPS_SCRIPT_URL 是「图片分析」Web App，且 secret 一致；或改用 JSON/CSV 同步。"
+            "Apps Script 鉴权失败：请确认 Cloudflare 的 APPS_SCRIPT_URL 是结果表 Web App，且 secret 一致；或改用 JSON/CSV 同步。"
           );
         }
       }

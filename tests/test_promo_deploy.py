@@ -39,13 +39,13 @@ class PromoDeployHelperTests(unittest.TestCase):
     def test_rewrite_html_points_cdn_at_new_host(self):
         src = (
             'window.Q_GALLERY_DRIVE_CACHE_MANIFEST_URL = '
-            '"https://gallery-cache.zhixianglife.com/promo/manifest.json";\n'
+            '"https://cdn.old-example.net/promo/manifest.json";\n'
             'window.Q_GALLERY_DRIVE_FALLBACK_MANIFEST_URL = '
             '"https://drive.google.com/uc?export=download&id=abc";'
         )
         out = rewrite_gallery_html(src, "promo.my-site.com")
         self.assertIn("https://promo.my-site.com/cdn/promo/manifest.json", out)
-        self.assertNotIn("gallery-cache.zhixianglife.com", out)
+        self.assertNotIn("cdn.old-example.net", out)
         self.assertIn('Q_GALLERY_DRIVE_FALLBACK_MANIFEST_URL = ""', out)
 
     def test_secret_is_long_and_unique(self):
@@ -95,14 +95,14 @@ class PromoDeployHelperTests(unittest.TestCase):
 
     def test_new_domain_gets_its_own_project_and_secret(self):
         state = {
-            "host": "sucai.boxlane47281.website",
-            "project": "gallery-sucai-boxlane47281-website",
-            "bucket": "gallery-json-sucai-boxlane47281-website",
+            "host": "sucai.example.com",
+            "project": "gallery-sucai-example-com",
+            "bucket": "gallery-json-sucai-example-com",
             "secret": "old-site-secret-value",
         }
-        first = resolve_gallery_resources("sucai.boxlane47281.website", state)
+        first = resolve_gallery_resources("sucai.example.com", state)
         self.assertTrue(first["reused"])
-        self.assertEqual(first["project"], "gallery-sucai-boxlane47281-website")
+        self.assertEqual(first["project"], "gallery-sucai-example-com")
         self.assertEqual(first["secret"], "old-site-secret-value")
         second = resolve_gallery_resources("gallery.example.com", state)
         self.assertFalse(second["reused"])
@@ -113,8 +113,8 @@ class PromoDeployHelperTests(unittest.TestCase):
         self.assertNotIn(second["bucket"], {"q-gallery-json-cache"})
 
     def test_promo_hostname_does_not_reuse_production_project_name(self):
-        resources = resolve_gallery_resources("promo.zhixianglife.com", {})
-        self.assertEqual(resources["project"], "gallery-promo-zhixianglife-com")
+        resources = resolve_gallery_resources("promo.example.com", {})
+        self.assertEqual(resources["project"], "gallery-promo-example-com")
         self.assertNotEqual(resources["project"], "q-gallery-promo")
         self.assertNotEqual(resources["bucket"], "q-gallery-json-cache")
 

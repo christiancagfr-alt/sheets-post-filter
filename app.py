@@ -908,7 +908,7 @@ def _try_fire(st: dict, kind: str, job_key: str = "", cfg_factory=None) -> None:
     if datetime.now() < nxt:
         return
     job_key = job_key or menu_id or f"schedule:{kind}"
-    labels = {"filter": "筛选汇总", "align": "表头对齐", "video": "视频时长", "catalog": "目录汇总", "posts": "贴文汇总"}
+    labels = {"filter": "筛选汇总", "align": "表头对齐", "video": "视频时长", "catalog": "目录汇总", "posts": "多表汇总"}
     queued = False
     try:
         cfg = cfg_factory() if cfg_factory else ( _cfg_for_menu_id(menu_id) if menu_id else load_config() )
@@ -1272,7 +1272,7 @@ def start_publish_job(cfg: Config) -> str | None:
             src = str(cfg.cf_publish_source or "all").strip().lower()
             if src == "hot":
                 url = cfg.hot_target_url or cfg.target_url
-                sheet = cfg.hot_output_sheet or "点赞1000以上"
+                sheet = cfg.hot_output_sheet or "高亮结果"
                 start = int(cfg.hot_start_row or 1)
                 include_headers = bool(cfg.hot_include_headers)
             else:
@@ -1392,7 +1392,7 @@ def _run_posts_job(cfg: Config, job_key: str = "default") -> None:
             cancelled=lambda: job_cancelled(job_key),
         )
     except Exception as e:
-        _record_job_failure(e, "贴文汇总", job)
+        _record_job_failure(e, "多表汇总", job)
     finally:
         job["running"] = False
         job["finished_at"] = datetime.now().strftime("%H:%M:%S")

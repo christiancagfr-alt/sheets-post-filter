@@ -705,7 +705,7 @@ def run_catalog_merge(cfg, log: LogFn = print, cancelled=None) -> dict[str, Any]
     if not url_entries and not direct_entries:
         raise RuntimeError(
             "目录表的链接列没有找到表格链接。"
-            "B 列可以是完整表格网址，也可以是本表内部链接，例如 =HYPERLINK(\"#gid=995133928\",\"1751-小源\")"
+            "B 列可以是完整表格网址，也可以是本表内部链接，例如 =HYPERLINK(\"#gid=123456\",\"来源A\")"
         )
     if not sheet_entries and not direct_entries:
         raise RuntimeError("目录表的工作表名称列没有找到名称，且链接列也没有 #gid= 内部工作表链接")

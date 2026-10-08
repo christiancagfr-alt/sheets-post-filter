@@ -383,8 +383,8 @@ def with_retry(fn, log: LogFn = print, what: str = "请求", tries: int = RETRY_
             time.sleep(wait)
     raise last  # pragma: no cover
 
-# 截图「数据库」里的字段范围：所有源表表头相同，只换链接。
-DEFAULT_SOURCE_SHEET = "当月贴文库"
+# 默认字段范围：所有源表表头相同，只换链接。
+DEFAULT_SOURCE_SHEET = "源数据"
 DEFAULT_FIELDS: list[dict] = [
     {"name": "名字", "sheet": DEFAULT_SOURCE_SHEET, "range": "AB2:AB"},
     {"name": "帖文id", "sheet": DEFAULT_SOURCE_SHEET, "range": "A2:A"},
@@ -419,11 +419,11 @@ def copy_default_fields() -> list[dict]:
 class Config:
     credentials_file: str = ""
     credentials_files: list[str] = field(default_factory=list)
-    # 含「数据库」sheet 的表格（可选，一般不用）
+    # 含字段说明工作表的表格（可选，一般不用）
     config_url: str = ""
     # 汇总写入的目标表
     target_url: str = ""
-    # 多个数据源：[{name: 小组, url: 链接}]
+    # 多个数据源：[{name: 分组, url: 链接}]
     sources: list[dict] = field(default_factory=list)
     # 抓取字段（界面可改）。空则用截图默认。
     fields: list[dict] = field(default_factory=copy_default_fields)
@@ -431,7 +431,7 @@ class Config:
     source_urls: list[str] = field(default_factory=list)
     # 兼容旧字段：单表模式
     spreadsheet_id: str = ""
-    database_sheet: str = "数据库"
+    database_sheet: str = "字段表"
     date_sheet: str = ""
     date_start_cell: str = "A1"
     date_end_cell: str = "B1"
@@ -457,11 +457,11 @@ class Config:
     write_all: bool = True
     write_hot: bool = True
     hot_target_url: str = ""
-    hot_output_sheet: str = "点赞1000以上"
+    hot_output_sheet: str = "高亮结果"
     schedule_enabled: bool = False
     schedule_minutes: int = 60
     schedule_only_if_changed: bool = True
-    cf_publish_url: str = "https://promo.zhixianglife.com/api/publish-cache"
+    cf_publish_url: str = ""
     cf_publish_secret: str = ""
     cf_publish_after_sync: bool = False
     cf_publish_source: str = "all"  # all | hot
@@ -533,13 +533,13 @@ class Config:
     catalog_exclude_sheets: list[str] = field(default_factory=list)
     catalog_schedule_enabled: bool = False
     catalog_schedule_minutes: int = 180
-    # 贴文汇总：数据列表 K 列链接 → 各表「订阅」→ 对照贴文库后写入整合表
+    # 多表汇总：数据列表链接列 → 各表明细工作表 → 对照后写入整合表
     pa_list_url: str = ""
     pa_list_sheet: str = "数据列表"
     pa_link_col: str = "K"
     pa_tag_col: str = "L"
     pa_start_row: int = 2
-    pa_sub_sheet: str = "订阅"
+    pa_sub_sheet: str = "明细"
     pa_source_cols: list[str] = field(default_factory=lambda: ["J", "M", "O", "A", "L", "E", "N"])
     pa_date_col: str = "M"
     pa_date_filter_enabled: bool = True
@@ -548,7 +548,7 @@ class Config:
     pa_include_tag: bool = True
     pa_lookup_enabled: bool = True
     pa_lookup_url: str = ""
-    pa_lookup_sheet: str = "当月贴文库"
+    pa_lookup_sheet: str = "对照表"
     pa_lookup_key_col: str = "B"
     pa_lookup_value_col: str = "N"
     pa_match_col: str = "J"
@@ -2342,7 +2342,7 @@ def run_align_sync(cfg: Config, log: LogFn = print) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="多源贴文库筛选汇总（替代 IMPORTRANGE 公式）")
+    p = argparse.ArgumentParser(description="多源表格筛选汇总（替代 IMPORTRANGE 公式）")
     p.add_argument("--config", default="", help="config.json 路径")
     p.add_argument("--spreadsheet-id", default="", help="配置表 ID（旧参数）")
     p.add_argument("--config-url", default="", help="含「数据库」sheet 的表格链接")

@@ -282,7 +282,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_catalog_reuses_worksheet_list(self):
         calls = {"n": 0}
-        wanted = SimpleNamespace(title="1751-小源", id=995133928)
+        wanted = SimpleNamespace(title="来源A", id=123456789)
 
         def listing():
             calls["n"] += 1
@@ -293,27 +293,27 @@ class CatalogTests(unittest.TestCase):
         second = _worksheets_cached(spreadsheet)
         self.assertIs(first, second)
         self.assertEqual(calls["n"], 1)
-        self.assertIs(_find_ws(spreadsheet, gid=995133928), wanted)
+        self.assertIs(_find_ws(spreadsheet, gid=123456789), wanted)
         self.assertEqual(calls["n"], 1)
 
     def test_catalog_parses_internal_gid_hyperlink(self):
-        formula = '=HYPERLINK("#gid=995133928","1751-小源")'
+        formula = '=HYPERLINK("#gid=123456789","来源A")'
         parsed = parse_catalog_link(formula)
-        self.assertEqual(parsed["gid"], 995133928)
-        self.assertEqual(parsed["label"], "1751-小源")
+        self.assertEqual(parsed["gid"], 123456789)
+        self.assertEqual(parsed["label"], "来源A")
         self.assertTrue(parsed["internal"])
         self.assertFalse(parsed["spreadsheet_id"])
-        combined = _combine_catalog_link("#gid=995133928", formula)
-        self.assertEqual(combined["gid"], 995133928)
-        self.assertEqual(combined["label"], "1751-小源")
-        wanted = SimpleNamespace(title="1751-小源", id=995133928)
+        combined = _combine_catalog_link("#gid=123456789", formula)
+        self.assertEqual(combined["gid"], 123456789)
+        self.assertEqual(combined["label"], "来源A")
+        wanted = SimpleNamespace(title="来源A", id=123456789)
         spreadsheet = SimpleNamespace(worksheets=lambda: [SimpleNamespace(title="目录", id=1), wanted])
-        self.assertIs(_find_ws(spreadsheet, gid=995133928), wanted)
-        self.assertIs(_find_ws(spreadsheet, title="1751-小源"), wanted)
+        self.assertIs(_find_ws(spreadsheet, gid=123456789), wanted)
+        self.assertIs(_find_ws(spreadsheet, title="来源A"), wanted)
 
     def test_catalog_merges_internal_gid_sheets(self):
         index_ws = SimpleNamespace(title="目录", id=11)
-        wanted_ws = SimpleNamespace(title="1751-小源", id=995133928)
+        wanted_ws = SimpleNamespace(title="来源A", id=123456789)
         index_ss = SimpleNamespace(title="专页目录", id="index", worksheets=lambda: [index_ws, wanted_ws])
         target_ss = SimpleNamespace(title="目标", id="target")
         cfg = app.Config(
@@ -333,13 +333,13 @@ class CatalogTests(unittest.TestCase):
             if ws is index_ws:
                 return [
                     ["专页ID", "姓名", "", ""],
-                    ["1751", '=HYPERLINK("#gid=995133928","1751-小源")', "", ""],
+                    ["A1", '=HYPERLINK("#gid=123456789","来源A")', "", ""],
                 ]
             return []
 
         def fake_batches(ws, log, cancelled=None):
             if ws is wanted_ws:
-                yield [["表头"], ["小源数据"]]
+                yield [["表头"], ["示例数据"]]
 
         captured = {}
 
@@ -362,21 +362,21 @@ class CatalogTests(unittest.TestCase):
             patch("catalog_merge.pick_source_ws", return_value=index_ws),
             patch("catalog_merge.read_sheet_values", side_effect=fake_read),
             patch("catalog_merge._read_source_batches", side_effect=fake_batches),
-            patch("catalog_merge._read_link_column", return_value=["#gid=995133928"]),
+            patch("catalog_merge._read_link_column", return_value=["#gid=123456789"]),
             patch("catalog_merge._StreamingWriter", FakeWriter),
         ):
             result = run_catalog_merge(cfg, log=lambda _message: None)
         self.assertEqual(result["total_rows"], 2)
-        self.assertEqual(captured["writer"].rows, [["来源", "表头"], ["1751-小源", "小源数据"]])
-        self.assertTrue(any(item.get("sheet") == "1751-小源" and not item.get("error") for item in result["sources"]))
+        self.assertEqual(captured["writer"].rows, [["来源", "表头"], ["来源A", "示例数据"]])
+        self.assertTrue(any(item.get("sheet") == "来源A" and not item.get("error") for item in result["sources"]))
 
     def test_catalog_skips_excluded_sheet_names(self):
         self.assertTrue(_catalog_name_excluded("导航", ["导航"]))
-        self.assertTrue(_catalog_name_excluded("1751-小源", ["1751*"]))
-        self.assertFalse(_catalog_name_excluded("1751-小源", ["导航"]))
+        self.assertTrue(_catalog_name_excluded("来源A", ["来源*"]))
+        self.assertFalse(_catalog_name_excluded("来源A", ["导航"]))
         index_ws = SimpleNamespace(title="目录", id=11)
         skip_ws = SimpleNamespace(title="导航", id=22)
-        keep_ws = SimpleNamespace(title="1751-小源", id=995133928)
+        keep_ws = SimpleNamespace(title="来源A", id=123456789)
         index_ss = SimpleNamespace(title="专页目录", id="index", worksheets=lambda: [index_ws, skip_ws, keep_ws])
         target_ss = SimpleNamespace(title="目标", id="target")
         cfg = app.Config(
@@ -398,7 +398,7 @@ class CatalogTests(unittest.TestCase):
                 return [
                     ["专页ID", "姓名", "", ""],
                     ["nav", '=HYPERLINK("#gid=22","导航")', "", ""],
-                    ["1751", '=HYPERLINK("#gid=995133928","1751-小源")', "", ""],
+                    ["A1", '=HYPERLINK("#gid=123456789","来源A")', "", ""],
                 ]
             return []
 
@@ -406,7 +406,7 @@ class CatalogTests(unittest.TestCase):
             if ws is skip_ws:
                 yield [["不该出现"]]
             if ws is keep_ws:
-                yield [["表头"], ["小源数据"]]
+                yield [["表头"], ["示例数据"]]
 
         captured = {}
 
@@ -429,11 +429,11 @@ class CatalogTests(unittest.TestCase):
             patch("catalog_merge.pick_source_ws", return_value=index_ws),
             patch("catalog_merge.read_sheet_values", side_effect=fake_read),
             patch("catalog_merge._read_source_batches", side_effect=fake_batches),
-            patch("catalog_merge._read_link_column", return_value=["#gid=22", "#gid=995133928"]),
+            patch("catalog_merge._read_link_column", return_value=["#gid=22", "#gid=123456789"]),
             patch("catalog_merge._StreamingWriter", FakeWriter),
         ):
             result = run_catalog_merge(cfg, log=lambda _message: None)
-        self.assertEqual(captured["writer"].rows, [["来源", "表头"], ["1751-小源", "小源数据"]])
+        self.assertEqual(captured["writer"].rows, [["来源", "表头"], ["来源A", "示例数据"]])
         self.assertFalse(any(item.get("sheet") == "导航" and item.get("rows") for item in result["sources"]))
 
     def test_catalog_read_stays_inside_grid(self):
@@ -520,9 +520,9 @@ class CatalogTests(unittest.TestCase):
 
     def test_catalog_survives_emoji_in_sheet_title(self):
         index_ws = SimpleNamespace(title="目录")
-        wanted_ws = SimpleNamespace(title="🌛 Massane 录")
+        wanted_ws = SimpleNamespace(title="示例工作表 🌙")
         index_ss = SimpleNamespace(title="索引", id="index", worksheets=lambda: [index_ws])
-        source_ss = SimpleNamespace(title="Vila Massane", id="source-a", worksheets=lambda: [wanted_ws])
+        source_ss = SimpleNamespace(title="示例表格", id="source-a", worksheets=lambda: [wanted_ws])
         target_ss = SimpleNamespace(title="目标", id="target")
         cfg = app.Config(
             catalog_index_url="index-url",
@@ -539,7 +539,7 @@ class CatalogTests(unittest.TestCase):
 
         def fake_read(ws, log=print):
             if ws is index_ws:
-                return [["", "", "", ""], ["", "url-a", "", "🌛 Massane 录"]]
+                return [["", "", "", ""], ["", "url-a", "", "示例工作表 🌙"]]
             return []
 
         def fake_batches(ws, log, cancelled=None):
@@ -575,7 +575,7 @@ class CatalogTests(unittest.TestCase):
             result = run_catalog_merge(cfg, log=exploding_log)
         self.assertTrue(result["ok"])
         self.assertEqual(result["total_rows"], 2)
-        self.assertEqual(captured["writer"].rows, [["来源", "表头"], ["🌛 Massane 录", "数据"]])
+        self.assertEqual(captured["writer"].rows, [["来源", "表头"], ["示例工作表 🌙", "数据"]])
 
 
 class VideoReportTests(unittest.TestCase):
@@ -858,8 +858,8 @@ class VideoReportTests(unittest.TestCase):
     def test_log_accepts_emoji(self):
         job, _lock = app._job_parts("emoji-log-test")
         job["logs"] = []
-        app._log("读取「🌛 Massane 录」", job)
-        self.assertIn("🌛", job["logs"][-1]["msg"])
+        app._log("读取「示例工作表 🌙」", job)
+        self.assertIn("🌙", job["logs"][-1]["msg"])
 
     def test_custom_buckets_separate_and_other(self):
         self.assertEqual(_custom_buckets(["口播"], ["口播"], [], "其他"), ["口播"])
@@ -1066,7 +1066,7 @@ class VideoReportTests(unittest.TestCase):
         from datetime import date
 
         self.assertEqual(_detect_date_index(["姓名", "登记日期", "电话"]), 1)
-        self.assertEqual(_row_fingerprint(["1751-小源", "123", ""]), ("1751-小源", "123"))
+        self.assertEqual(_row_fingerprint(["来源A", "123", ""]), ("来源A", "123"))
         kept, skipped = _filter_chunk_by_date(
             [["日期", "电话"], ["2026-08-10", "1"], ["2026-09-01", "2"], ["", "3"]],
             0,
@@ -1077,12 +1077,12 @@ class VideoReportTests(unittest.TestCase):
         self.assertEqual(skipped, 2)
         self.assertEqual(kept, [["日期", "电话"], ["2026-08-10", "1"]])
         seen: set[tuple[str, ...]] = set()
-        first, n1 = _take_new_rows([["1751-小源", "123"]], seen)
-        second, n2 = _take_new_rows([["1751-小源", "123"], ["1626-小瑞", "456"]], seen)
-        self.assertEqual(first, [["1751-小源", "123"]])
+        first, n1 = _take_new_rows([["来源A", "123"]], seen)
+        second, n2 = _take_new_rows([["来源A", "123"], ["来源B", "456"]], seen)
+        self.assertEqual(first, [["来源A", "123"]])
         self.assertEqual(n1, 0)
         self.assertEqual(n2, 1)
-        self.assertEqual(second, [["1626-小瑞", "456"]])
+        self.assertEqual(second, [["来源B", "456"]])
 
         self.assertEqual(_detect_phone_index(["来源", "姓名", "电话号码"]), 2)
         self.assertEqual(
@@ -1092,7 +1092,7 @@ class VideoReportTests(unittest.TestCase):
 
     def test_catalog_multiple_targets_share_one_phone_dedupe_set(self):
         index_ws = SimpleNamespace(title="目录", id=11)
-        wanted_ws = SimpleNamespace(title="1751-小源", id=995133928)
+        wanted_ws = SimpleNamespace(title="来源A", id=123456789)
         index_ss = SimpleNamespace(title="专页目录", id="index", worksheets=lambda: [index_ws, wanted_ws])
         targets = {
             "target-1": SimpleNamespace(title="备份1", id="target-1"),
@@ -1117,7 +1117,7 @@ class VideoReportTests(unittest.TestCase):
 
         def fake_read(ws, log=print):
             if ws is index_ws:
-                return [["", "", "", ""], ["", '=HYPERLINK("#gid=995133928","1751-小源")', "", ""]]
+                return [["", "", "", ""], ["", '=HYPERLINK("#gid=123456789","来源A")', "", ""]]
             return []
 
         def fake_batches(ws, log, cancelled=None):
@@ -1160,7 +1160,7 @@ class VideoReportTests(unittest.TestCase):
             patch("catalog_merge.pick_source_ws", return_value=index_ws),
             patch("catalog_merge.read_sheet_values", side_effect=fake_read),
             patch("catalog_merge._read_source_batches", side_effect=fake_batches),
-            patch("catalog_merge._read_link_column", return_value=["#gid=995133928"]),
+            patch("catalog_merge._read_link_column", return_value=["#gid=123456789"]),
             patch("catalog_merge._StreamingWriter", FakeWriter),
         ):
             result = run_catalog_merge(cfg, log=lambda _message: None)
@@ -1175,7 +1175,7 @@ class VideoReportTests(unittest.TestCase):
 
     def test_catalog_merge_skips_out_of_range_dates(self):
         index_ws = SimpleNamespace(title="目录", id=11)
-        wanted_ws = SimpleNamespace(title="1751-小源", id=995133928)
+        wanted_ws = SimpleNamespace(title="来源A", id=123456789)
         index_ss = SimpleNamespace(title="专页目录", id="index", worksheets=lambda: [index_ws, wanted_ws])
         target_ss = SimpleNamespace(title="目标", id="target")
         cfg = app.Config(
@@ -1197,7 +1197,7 @@ class VideoReportTests(unittest.TestCase):
 
         def fake_read(ws, log=print):
             if ws is index_ws:
-                return [["", "", "", ""], ["", '=HYPERLINK("#gid=995133928","1751-小源")', "", ""]]
+                return [["", "", "", ""], ["", '=HYPERLINK("#gid=123456789","来源A")', "", ""]]
             return []
 
         def fake_batches(ws, log, cancelled=None):
@@ -1223,13 +1223,13 @@ class VideoReportTests(unittest.TestCase):
             patch("catalog_merge.pick_source_ws", return_value=index_ws),
             patch("catalog_merge.read_sheet_values", side_effect=fake_read),
             patch("catalog_merge._read_source_batches", side_effect=fake_batches),
-            patch("catalog_merge._read_link_column", return_value=["#gid=995133928"]),
+            patch("catalog_merge._read_link_column", return_value=["#gid=123456789"]),
             patch("catalog_merge._StreamingWriter", FakeWriter),
         ):
             result = run_catalog_merge(cfg, log=lambda _message: None)
         self.assertEqual(
             captured["writer"].rows,
-            [["来源", "日期", "电话"], ["1751-小源", "2026-08-10", "111"]],
+            [["来源", "日期", "电话"], ["来源A", "2026-08-10", "111"]],
         )
         self.assertEqual(result["date_skipped"], 1)
         self.assertEqual(result["sheet_total"], result["total_rows"])
@@ -1237,16 +1237,16 @@ class VideoReportTests(unittest.TestCase):
 
     def test_catalog_source_column_uses_sheet_name(self):
         self.assertEqual(
-            _attach_source_column([["姓名", "电话"], ["张三", "123"]], "1751-小源", True),
-            [["来源", "姓名", "电话"], ["1751-小源", "张三", "123"]],
+            _attach_source_column([["姓名", "电话"], ["张三", "123"]], "来源A", True),
+            [["来源", "姓名", "电话"], ["来源A", "张三", "123"]],
         )
         self.assertEqual(
-            _attach_source_column([["张三", "123"]], "1626-小瑞", False),
-            [["1626-小瑞", "张三", "123"]],
+            _attach_source_column([["张三", "123"]], "来源B", False),
+            [["来源B", "张三", "123"]],
         )
         self.assertEqual(
-            _attach_source_column([["来源", "姓名"], ["张三"]], "1751-小源", True),
-            [["来源", "姓名"], ["1751-小源", "张三"]],
+            _attach_source_column([["来源", "姓名"], ["张三"]], "来源A", True),
+            [["来源", "姓名"], ["来源A", "张三"]],
         )
 
     def test_catalog_keeps_existing_sheet_instead_of_wiping(self):

@@ -1,4 +1,4 @@
-# Google Apps Script（图片分析表 → JSON 缓存）
+# Google Apps Script（结果表 → JSON 缓存）
 
 原 Vercel 部署包未附带 `.gs`，已从同源工程补回并加上 **J/AB 列**。
 
@@ -19,7 +19,7 @@
 
 ## 部署到 Google
 
-1. 打开绑定「图片分析」的脚本项目  
+1. 打开绑定结果表的脚本项目  
 2. 用本目录脚本覆盖对应文件  
 3. 重新跑缓存刷新 / `qGalleryExportDriveCacheManifest`  
 4. 确认输出 JSON 的每条记录含 `likes`、`designer`  

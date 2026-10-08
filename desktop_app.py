@@ -551,7 +551,7 @@ class DesktopApp(tk.Tk):
         self.btn_align = StyleBtn(actions, "ghost", text="开始对齐同步", command=self._run_align)
         self.btn_video = StyleBtn(actions, "head", text="提取视频时长", command=self._run_video)
         self.btn_catalog = StyleBtn(actions, "primary", text="开始目录汇总", command=self._run_catalog)
-        self.btn_posts = StyleBtn(actions, "primary", text="开始贴文汇总", command=self._run_posts)
+        self.btn_posts = StyleBtn(actions, "primary", text="开始多表汇总", command=self._run_posts)
         self.btn_roster = StyleBtn(actions, "primary", text="开始队别专页汇总", command=self._run_roster)
         self.btn_stop = StyleBtn(actions, "ghost", text="停止当前", command=self._stop_current)
         self.btn_run_selected = StyleBtn(actions, "head", text="执行所选", command=self._run_selected)
@@ -623,9 +623,9 @@ class DesktopApp(tk.Tk):
 
     def _init_menus(self) -> None:
         template_names = {
-            "filter": "贴文筛选汇总",
+            "filter": "数据筛选汇总",
             "catalog": "目录表驱动汇总",
-            "posts": "贴文汇总",
+            "posts": "多表汇总",
             "align": "字段映射 / 表头对齐",
             "video": "视频提取时长",
             "custom": "自定义数据汇总",
@@ -703,7 +703,7 @@ class DesktopApp(tk.Tk):
                 relief="flat",
                 highlightthickness=0,
             ).pack(side="left", padx=(2, 0))
-            labels = {"filter": "贴文模板", "catalog": "目录模板", "posts": "贴文汇总", "align": "映射模板", "video": "时长模板", "custom": "自定义模板", "roster": "专页模板"}
+            labels = {"filter": "筛选模板", "catalog": "目录模板", "posts": "多表汇总", "align": "映射模板", "video": "时长模板", "custom": "自定义模板", "roster": "名单模板"}
             text = f"{item['name']}\n  {labels.get(item['template'], '')}"
             btn = tk.Button(
                 wrap,
@@ -794,7 +794,7 @@ class DesktopApp(tk.Tk):
         name = simpledialog.askstring("修改菜单名称", "新名称：", initialvalue=item["name"], parent=self)
         if name and name.strip():
             item["name"] = name.strip()
-            labels = {"filter": "贴文模板", "catalog": "目录模板", "posts": "贴文汇总", "align": "映射模板", "video": "时长模板", "custom": "自定义模板", "roster": "专页模板"}
+            labels = {"filter": "筛选模板", "catalog": "目录模板", "posts": "多表汇总", "align": "映射模板", "video": "时长模板", "custom": "自定义模板", "roster": "名单模板"}
             btn = self._menu_buttons.get(menu_id)
             if btn:
                 btn.configure(text=f"{item['name']}\n  {labels.get(item['template'], '')}")
@@ -810,9 +810,9 @@ class DesktopApp(tk.Tk):
         tk.Label(win, text="选择模板类型", bg=C["paper"], fg=C["ink"], font=FB).pack(anchor="w", padx=18, pady=(16, 8))
         chosen: dict[str, str] = {}
         options = (
-            ("filter", "贴文筛选汇总", "按日期、点赞筛选贴文库"),
+            ("filter", "数据筛选汇总", "按日期、互动数筛选源表"),
             ("catalog", "目录表驱动汇总", "按目录表列出的表格合并写入"),
-            ("posts", "贴文汇总", "按数据列表链接读取订阅表，对照贴文库后写入整合表"),
+            ("posts", "多表汇总", "按列表链接读取明细表，对照后写入整合表"),
             ("align", "字段映射 / 表头对齐", "把多张表按字段对齐"),
             ("video", "视频提取时长", "读视频链接，写日志表和数据表"),
             ("custom", "自定义数据汇总", "按分类每天计数，不写日志、不算时长"),
@@ -851,7 +851,7 @@ class DesktopApp(tk.Tk):
         template = self._pick_template()
         if not template:
             return
-        labels = {"filter": "贴文筛选汇总", "catalog": "目录表驱动汇总", "posts": "贴文汇总", "align": "字段映射 / 表头对齐", "video": "视频提取时长", "custom": "自定义数据汇总"}
+        labels = {"filter": "数据筛选汇总", "catalog": "目录表驱动汇总", "posts": "多表汇总", "align": "字段映射 / 表头对齐", "video": "视频提取时长", "custom": "自定义数据汇总"}
         name = simpledialog.askstring("新增配置菜单", "菜单名称：", initialvalue=f"{labels.get(template, template)}副本", parent=self)
         if not name or not name.strip():
             return
@@ -1366,11 +1366,11 @@ class DesktopApp(tk.Tk):
 
     def _build_filter(self, p) -> None:
         c1 = self._card(p, "1. 数据源表格链接", "只换链接，列范围相同", collapsed=True)
-        self._note(c1, "每个源表都是同一套表头（当月贴文库）。小组名可选，用来写进汇总结果。")
-        box, count, _ph = self._src_table(c1, ["小组（可选）", "表格链接"], "+ 添加数据源", "_src_rows", "例如：管理组")
+        self._note(c1, "每个源表都是同一套表头。分组名可选，用来写进汇总结果。")
+        box, count, _ph = self._src_table(c1, ["分组（可选）", "表格链接"], "+ 添加数据源", "_src_rows", "例如：分组A")
         self.src_box, self.src_count = box, count
         self.var_add_source_column = tk.BooleanVar(value=True)
-        self._check(c1, "把「小组」写到 AC 列（不占用 A 列）", self.var_add_source_column)
+        self._check(c1, "把「分组」写到 AC 列（不占用 A 列）", self.var_add_source_column)
 
         c2 = self._card(p, "2. 日期与点赞过滤")
         self.var_start = tk.StringVar()
@@ -1380,11 +1380,11 @@ class DesktopApp(tk.Tk):
         self._cell(g, 0, "开始日期", self.var_start)
         self._cell(g, 1, "结束日期", self.var_end)
         self._cell(g, 2, "点赞阈值", self.var_likes)
-        self._note(c2, "日期先筛一遍；高赞表再取点赞 ≥ 阈值的行。默认按 B 列帖文id 增量更新。")
+        self._note(c2, "日期先筛一遍；高亮表再取互动数 ≥ 阈值的行。默认按编号列增量更新。")
 
         c3 = self._card(p, "3. 写入结果", "两套配置互不影响", collapsed=True)
         self.var_upsert = tk.BooleanVar(value=True)
-        self._check(c3, "按 B 列帖文id 更新（已有行只改变化的列，新 id 追加；取消则整表覆盖）", self.var_upsert)
+        self._check(c3, "按编号列更新（已有行只改变化的列，新编号追加；取消则整表覆盖）", self.var_upsert)
         self.var_write_all = tk.BooleanVar(value=True)
         self._check(c3, "全部结果（日期筛选后的所有行）", self.var_write_all)
         self.var_target_url = tk.StringVar()
@@ -1402,11 +1402,11 @@ class DesktopApp(tk.Tk):
 
         tk.Frame(c3, bg=C["line"], height=1).pack(fill="x", pady=10)
         self.var_write_hot = tk.BooleanVar(value=True)
-        self._check(c3, "高赞结果（点赞 ≥ 阈值）", self.var_write_hot)
+        self._check(c3, "高亮结果（互动数 ≥ 阈值）", self.var_write_hot)
         self.var_hot_target_url = tk.StringVar()
         self._entry(c3, "表格链接（留空 = 与全部结果同一张表）", self.var_hot_target_url)
         g = self._row3(c3)
-        self.var_hot_output_sheet = tk.StringVar(value="点赞1000以上")
+        self.var_hot_output_sheet = tk.StringVar(value="高亮结果")
         self.var_hot_start_row = tk.StringVar(value="1")
         self.var_hot_include_headers = tk.BooleanVar(value=True)
         self._cell(g, 0, "工作表名", self.var_hot_output_sheet)
@@ -1418,10 +1418,10 @@ class DesktopApp(tk.Tk):
 
         c4 = self._card(p, "4. 发布到 Cloudflare", "密钥等少改，点标题展开", collapsed=True)
         self._note(c4, "发布请用顶部「发布图库」。这里只改地址和密钥。数据和上次相同会跳过。")
-        self.var_cf_url = tk.StringVar(value="https://promo.zhixianglife.com/api/publish-cache")
+        self.var_cf_url = tk.StringVar()
         self.var_cf_secret = tk.StringVar()
-        self._entry(c4, "发布地址", self.var_cf_url)
-        self._entry(c4, "CACHE_PUBLISH_SECRET", self.var_cf_secret, show="•")
+        self._entry(c4, "发布地址（例如 https://gallery.example.com/api/publish-cache）", self.var_cf_url)
+        self._entry(c4, "发布密钥", self.var_cf_secret, show="•")
         g = self._row3(c4)
         cell = tk.Frame(g, bg=C["card"])
         cell.grid(row=0, column=0, sticky="ew")
@@ -1453,8 +1453,8 @@ class DesktopApp(tk.Tk):
         self.sched_info = tk.Label(c5, text="定时未启动", bg=C["card"], fg=C["muted"], font=FS)
         self.sched_info.pack(anchor="w", pady=4)
 
-        c6 = self._card(p, "6. 抓取字段", "默认按截图，可改", collapsed=True)
-        self._note(c6, "对应「数据库」里的 D 列范围。以后换列，改这里即可。")
+        c6 = self._card(p, "6. 抓取字段", "可改列范围", collapsed=True)
+        self._note(c6, "填写源表工作表名和列范围。以后换列，改这里即可。")
         fh = tk.Frame(c6, bg="#efe8d8")
         fh.pack(fill="x")
         for t, w in (("字段名", 16), ("工作表", 16), ("范围", 16)):
@@ -1466,7 +1466,7 @@ class DesktopApp(tk.Tk):
         fr = tk.Frame(c6, bg=C["card"])
         fr.pack(anchor="w")
         StyleBtn(fr, "ghost", text="+ 添加字段", command=lambda: self._add_field({})).pack(side="left")
-        StyleBtn(fr, "ghost", text="恢复截图默认", command=self._reset_fields).pack(side="left", padx=6)
+        StyleBtn(fr, "ghost", text="恢复默认字段", command=self._reset_fields).pack(side="left", padx=6)
 
         c7 = self._card(p, "高级选项", collapsed=True)
         self.var_exclude = tk.StringVar(value="未找到")
@@ -1493,7 +1493,7 @@ class DesktopApp(tk.Tk):
         n.insert(0, (item or {}).get("name") or "")
         n.pack(side="left", ipady=4, padx=(0, 6))
         s = tk.Entry(row, font=MONO, relief="solid", bd=1, width=16)
-        s.insert(0, (item or {}).get("sheet") or "当月贴文库")
+        s.insert(0, (item or {}).get("sheet") or "源数据")
         s.pack(side="left", ipady=4, padx=(0, 6))
         r = tk.Entry(row, font=MONO, relief="solid", bd=1, width=16)
         r.insert(0, (item or {}).get("range") or "")
@@ -1528,7 +1528,7 @@ class DesktopApp(tk.Tk):
             name = r._name.get().strip()
             rng = r._range.get().strip()
             if name and rng:
-                out.append({"name": name, "sheet": r._sheet.get().strip() or "当月贴文库", "range": rng})
+                out.append({"name": name, "sheet": r._sheet.get().strip() or "源数据", "range": rng})
         return out
 
     def _build_catalog(self, p) -> None:
@@ -1536,7 +1536,7 @@ class DesktopApp(tk.Tk):
         self._note(
             c1,
             "目录表默认 B 列是表格链接、D 列是要查找的工作表名称；两列都可以修改。"
-            "B 列也支持本表内部链接，例如 =HYPERLINK(\"#gid=995133928\",\"1751-小源\")，会按 gid 汇总对应工作表。",
+            "B 列也支持本表内部链接，例如 =HYPERLINK(\"#gid=123456\",\"来源A\")，会按 gid 汇总对应工作表。",
         )
         self.var_catalog_index_url = tk.StringVar()
         self.var_catalog_index_sheet = tk.StringVar()
@@ -1553,12 +1553,12 @@ class DesktopApp(tk.Tk):
         self.var_catalog_keep_header = tk.BooleanVar(value=False)
         self._check(c1, "每个工作表都保留首行（不勾选则只保留第一份表头）", self.var_catalog_keep_header)
         self.var_catalog_add_source = tk.BooleanVar(value=True)
-        self._check(c1, "写入时在 A 列追加来源（用目录里的工作表名称，例如 1751-小源）", self.var_catalog_add_source)
+        self._check(c1, "写入时在 A 列追加来源（用目录里的工作表名称，例如 来源A）", self.var_catalog_add_source)
         self.var_catalog_skip_existing = tk.BooleanVar(value=True)
         self._check(c1, "已有的行跳过，只追加新行（多个目标表之间也全局排重）", self.var_catalog_skip_existing)
         tk.Label(
             c1,
-            text="排除这些工作表名称（不汇总。精确匹配；可用 * 通配符，例如 导航 或 1751*）",
+            text="排除这些工作表名称（不汇总。精确匹配；可用 * 通配符，例如 目录 或 分组*）",
             bg=C["card"],
             fg=C["muted"],
             font=FS,
@@ -1663,7 +1663,7 @@ class DesktopApp(tk.Tk):
             "pa_link_col": "K",
             "pa_tag_col": "L",
             "pa_start_row": "2",
-            "pa_sub_sheet": "订阅",
+            "pa_sub_sheet": "明细",
             "pa_source_cols": ["J", "M", "O", "A", "L", "E", "N"],
             "pa_date_col": "M",
             "pa_date_filter_enabled": True,
@@ -1672,7 +1672,7 @@ class DesktopApp(tk.Tk):
             "pa_include_tag": True,
             "pa_lookup_enabled": True,
             "pa_lookup_url": "https://docs.google.com/spreadsheets/d/1_eY__L_DB-Pk74OuCuZbYNUEI1fUvT61a2kK4q-be1k/edit",
-            "pa_lookup_sheet": "当月贴文库",
+            "pa_lookup_sheet": "对照表",
             "pa_lookup_key_col": "B",
             "pa_lookup_value_col": "N",
             "pa_match_col": "J",
@@ -1726,7 +1726,7 @@ class DesktopApp(tk.Tk):
         self._set_str(self.var_pa_link_col, s.get("pa_link_col"), "K")
         self._set_str(self.var_pa_tag_col, s.get("pa_tag_col"), "L")
         self._set_bool(self.var_pa_include_tag, s.get("pa_include_tag"), True)
-        self._set_str(self.var_pa_sub_sheet, s.get("pa_sub_sheet"), "订阅")
+        self._set_str(self.var_pa_sub_sheet, s.get("pa_sub_sheet"), "明细")
         self._set_posts_cols(s.get("pa_source_cols") or defaults["pa_source_cols"])
         self._set_bool(self.var_pa_date_filter, s.get("pa_date_filter_enabled"), True)
         self._set_str(self.var_pa_date_col, s.get("pa_date_col"), "M")
@@ -1734,7 +1734,7 @@ class DesktopApp(tk.Tk):
         self._set_str(self.var_pa_end, s.get("pa_end_date"))
         self._set_bool(self.var_pa_lookup_enabled, s.get("pa_lookup_enabled"), True)
         self._set_str(self.var_pa_lookup_url, s.get("pa_lookup_url"), defaults["pa_lookup_url"])
-        self._set_str(self.var_pa_lookup_sheet, s.get("pa_lookup_sheet"), "当月贴文库")
+        self._set_str(self.var_pa_lookup_sheet, s.get("pa_lookup_sheet"), "对照表")
         self._set_str(self.var_pa_lookup_key, s.get("pa_lookup_key_col"), "B")
         self._set_str(self.var_pa_lookup_value, s.get("pa_lookup_value_col"), "N")
         self._set_str(self.var_pa_match_col, s.get("pa_match_col"), "J")
@@ -1749,10 +1749,10 @@ class DesktopApp(tk.Tk):
         self._set_str(self.var_pa_minutes, s.get("pa_schedule_minutes"), "120")
 
     def _build_posts(self, p) -> None:
-        c1 = self._card(p, "1. 数据列表", "列出要汇总的订阅表链接")
+        c1 = self._card(p, "1. 数据列表", "列出要汇总的明细表链接")
         self._note(
             c1,
-            "主表里一列是各订阅表格链接，一列是来源标记（写入整合表）。"
+            "主表里一列是各明细表格链接，一列是来源标记（写入整合表）。"
             "链接列可以是完整网址，也可以是蓝字超链接。服务账号用软件顶部配置的 JSON。",
         )
         self.var_pa_list_url = tk.StringVar()
@@ -1768,11 +1768,11 @@ class DesktopApp(tk.Tk):
         self._cell(g2, 0, "链接所在列", self.var_pa_link_col)
         self._cell(g2, 1, "来源标记列", self.var_pa_tag_col)
         self.var_pa_include_tag = tk.BooleanVar(value=True)
-        self._check(c1, "把来源标记列写入整合表（接在订阅列后面）", self.var_pa_include_tag)
+        self._check(c1, "把来源标记列写入整合表（接在明细列后面）", self.var_pa_include_tag)
 
-        c2 = self._card(p, "2. 订阅表", "每个链接打开后读取这个工作表")
-        self.var_pa_sub_sheet = tk.StringVar(value="订阅")
-        self._entry(c2, "订阅工作表名", self.var_pa_sub_sheet)
+        c2 = self._card(p, "2. 明细表", "每个链接打开后读取这个工作表")
+        self.var_pa_sub_sheet = tk.StringVar(value="明细")
+        self._entry(c2, "明细工作表名", self.var_pa_sub_sheet)
         self._note(c2, "下面按顺序读取这些列，写入整合表 A 列起。默认 J、M、O、A、L、E、N。")
         self.posts_col_box = tk.Frame(c2, bg=C["card"])
         self.posts_col_box.pack(fill="x")
@@ -1785,24 +1785,24 @@ class DesktopApp(tk.Tk):
             self._add_posts_col(letter)
 
         c3 = self._card(p, "3. 日期筛选", "限制写入范围")
-        self._note(c3, "按订阅表里的日期列筛选。只填开始日期则从这天起（含当天）。格式 2026-08-22。")
+        self._note(c3, "按明细表里的日期列筛选。只填开始日期则从这天起（含当天）。格式例如 2026-01-01。")
         self.var_pa_date_filter = tk.BooleanVar(value=True)
         self._check(c3, "启用日期筛选", self.var_pa_date_filter)
         g = self._row3(c3)
         self.var_pa_date_col = tk.StringVar(value="M")
-        self.var_pa_start = tk.StringVar(value="2026-08-22")
+        self.var_pa_start = tk.StringVar()
         self.var_pa_end = tk.StringVar()
         self._cell(g, 0, "日期列", self.var_pa_date_col)
         self._cell(g, 1, "开始日期", self.var_pa_start)
         self._cell(g, 2, "结束日期", self.var_pa_end)
 
-        c4 = self._card(p, "4. 贴文库对照", "用订阅表一列去贴文库查找")
+        c4 = self._card(p, "4. 对照表查找", "用明细表一列去对照表查找")
         self.var_pa_lookup_enabled = tk.BooleanVar(value=True)
-        self._check(c4, "启用贴文库对照（结果追加在整合表最后一列）", self.var_pa_lookup_enabled)
+        self._check(c4, "启用对照表查找（结果追加在整合表最后一列）", self.var_pa_lookup_enabled)
         self.var_pa_lookup_url = tk.StringVar()
-        self._entry(c4, "贴文库表格链接", self.var_pa_lookup_url)
+        self._entry(c4, "对照表表格链接", self.var_pa_lookup_url)
         g = self._row3(c4)
-        self.var_pa_lookup_sheet = tk.StringVar(value="当月贴文库")
+        self.var_pa_lookup_sheet = tk.StringVar(value="对照表")
         self.var_pa_lookup_key = tk.StringVar(value="B")
         self.var_pa_lookup_value = tk.StringVar(value="N")
         self._cell(g, 0, "工作表名", self.var_pa_lookup_sheet)
@@ -1812,12 +1812,12 @@ class DesktopApp(tk.Tk):
         self.var_pa_match_col = tk.StringVar(value="J")
         self.var_pa_library_write_col = tk.StringVar(value="B")
         self.var_pa_library_start_row = tk.StringVar(value="2")
-        self._cell(g2, 0, "订阅表用来对照的列", self.var_pa_match_col)
-        self._cell(g2, 1, "写入贴文库哪一列", self.var_pa_library_write_col)
+        self._cell(g2, 0, "明细表用来对照的列", self.var_pa_match_col)
+        self._cell(g2, 1, "写入对照表哪一列", self.var_pa_library_write_col)
         self._cell(g2, 2, "新链接插入起始行", self.var_pa_library_start_row)
         self.var_pa_write_library = tk.BooleanVar(value=True)
-        self._check(c4, "同时把订阅表新链接写入贴文库（按查找列排重，已有的跳过）", self.var_pa_write_library)
-        self._note(c4, "整合表流程不变。默认用订阅表 J 列对照贴文库 B 列；新链接从上面设置的起始行插入，原有数据往下移。")
+        self._check(c4, "同时把明细表新链接写入对照表（按查找列排重，已有的跳过）", self.var_pa_write_library)
+        self._note(c4, "整合表流程不变。默认用明细表一列对照查找；新链接从上面设置的起始行插入，原有数据往下移。")
 
         c5 = self._card(p, "5. 写入目标表")
         self.var_pa_target_url = tk.StringVar()
@@ -1831,12 +1831,12 @@ class DesktopApp(tk.Tk):
         self._check(c5, "写入表头（默认不写，从第 2 行起覆盖 A 列往后）", self.var_pa_include_headers)
 
         c6 = self._card(p, "6. 定时汇总", "关掉窗口就不再跑")
-        self._note(c6, "原脚本每 2 小时跑一次。可改成自己的分钟数。")
+        self._note(c6, "可改成 1 小时、2 小时或自定义分钟数。")
         g = self._row3(c6)
         self.var_pa_minutes = tk.StringVar(value="120")
         self._cell(g, 0, "间隔（分钟）", self.var_pa_minutes)
         self.var_pa_sched = tk.BooleanVar(value=False)
-        self._check(c6, "启用贴文汇总定时", self.var_pa_sched)
+        self._check(c6, "启用多表汇总定时", self.var_pa_sched)
         self.posts_sched_info = tk.Label(c6, text="定时未启动", bg=C["card"], fg=C["muted"], font=FS)
         self.posts_sched_info.pack(anchor="w", pady=4)
 
@@ -1890,7 +1890,7 @@ class DesktopApp(tk.Tk):
         self._cell(g, 0, "默认工作表名", self.var_align_source_sheet)
         self._cell(g, 1, "表头所在行", self.var_align_header_row)
 
-        c2 = self._card(p, "2. 字段映射", "和贴文筛选一样可增减字段，可按链接单独配置")
+        c2 = self._card(p, "2. 字段映射", "和数据筛选一样可增减字段，可按链接单独配置")
         self._note(c2, "每一行：目标字段（写入列名）← 源字段（源表表头）。上面选「某个链接」后，只改这个链接的映射，不影响其它链接。")
         profile_row = tk.Frame(c2, bg=C["card"])
         profile_row.pack(fill="x", pady=4)
@@ -1960,7 +1960,7 @@ class DesktopApp(tk.Tk):
         self._cell(g, 0, "工作表名称（多个用逗号分隔）", self.var_vd_source_sheet)
         self._cell(g, 1, "数据起始行", self.var_vd_start_row)
 
-        c2 = self._card(p, "2. 源表列（默认可改）", "和贴文汇总一样，默认 A/B/H/E")
+        c2 = self._card(p, "2. 源表列（默认可改）", "列字母可改")
         self.vd_col_note = tk.Label(
             c2,
             text="列用字母。默认：A=日期，B=视频链接，H=制作人，E=类型。",
@@ -1985,7 +1985,7 @@ class DesktopApp(tk.Tk):
         self.vd_extra_col_box.pack(fill="x", pady=(6, 0))
         StyleBtn(c2, "ghost", text="+ 添加分类列", command=self._add_vd_extra_col).pack(anchor="e", pady=4)
 
-        c_date = self._card(p, "3. 日期筛选", "和贴文汇总一样，按 A 列日期")
+        c_date = self._card(p, "3. 日期筛选", "按日期列筛选")
         self._note(
             c_date,
             "填写开始、结束日期后：只查询、只汇总这个范围内的视频。留空则不限日期。格式例如 2026-08-01。",
@@ -2215,8 +2215,8 @@ class DesktopApp(tk.Tk):
         c1 = self._card(p, "1. 配置表", "提供人员、专页和数据表链接")
         self._note(
             c1,
-            "配置表默认：A 队别、B 类型、C 名字、G 专页名字、H 专页编码、I 专页链接、K chat、Q 是否上表、R 数据表格。"
-            "Q 列打勾 / true 的才汇总。R 列可以是蓝字超链接，程序会打开里面的「引流」工作表。",
+            "配置表默认按列填写人员、类型、页面编码和数据表链接。"
+            "标记为有效的行才会汇总。数据表链接可以是蓝字超链接，程序会打开里面的流量工作表。",
         )
         self.var_roster_config_url = tk.StringVar()
         self.var_roster_config_sheet = tk.StringVar()
@@ -2227,7 +2227,7 @@ class DesktopApp(tk.Tk):
         self._cell(g, 1, "数据起始行", self.var_roster_start_row)
 
         c2 = self._card(p, "2. 字段映射", "列字母可改")
-        self._note(c2, "每一行：字段名、用途、列字母。默认已按你给的 A/B/C/G/H/I/K/R 填好。")
+        self._note(c2, "每一行：字段名、用途、列字母。可按源表实际列修改。")
         fh = tk.Frame(c2, bg="#ecfdf5")
         fh.pack(fill="x")
         tk.Label(fh, text="字段", bg="#ecfdf5", font=FS, fg=C["muted"], width=16, anchor="w").pack(side="left", padx=4, pady=4)
@@ -2249,15 +2249,15 @@ class DesktopApp(tk.Tk):
             "目标表没有固定 sheet 名：按 A 列队别自动建工作表，同一队别写进同名 sheet。"
             "一列一个专页编码，同一个名字的专页排在一起。"
             "第 1 行 chat，第 2 行数据表链接，第 3 行专页链接，第 4 行空，第 5 行专页编码，第 6 行名字，第 7 行空，第 8 行类型，9–23 行空。"
-            "A24 起按引流表结构：一行日期，下面 24 个小时段（00:00-01:00 … 23:00-00:00），再下一日期，日期新的在前。"
-            "用第 5 行专页编码去引流表找对应列，按 A 列日期/时段对齐写入。",
+            "A24 起按流量表结构：一行日期，下面 24 个小时段（00:00-01:00 … 23:00-00:00），再下一日期，日期新的在前。"
+            "用第 5 行页面编码去流量表找对应列，按 A 列日期/时段对齐写入。",
         )
         self.var_roster_target_url = tk.StringVar()
-        self.var_roster_traffic_sheet = tk.StringVar(value="引流")
+        self.var_roster_traffic_sheet = tk.StringVar(value="流量")
         self.var_roster_date_start = tk.StringVar(value="24")
         self._entry(c3, "目标表格链接", self.var_roster_target_url)
         g = self._row3(c3)
-        self._cell(g, 0, "引流工作表名", self.var_roster_traffic_sheet)
+        self._cell(g, 0, "流量工作表名", self.var_roster_traffic_sheet)
         self._cell(g, 1, "日期起始行", self.var_roster_date_start)
 
     def _add_roster_map_row(self, field: str, role: str, column: str) -> None:
@@ -3161,7 +3161,7 @@ class DesktopApp(tk.Tk):
             self._set_str(self.var_roster_config_sheet, s.get("roster_config_sheet"))
             self._set_str(self.var_roster_start_row, s.get("roster_start_row"), "2")
             self._set_str(self.var_roster_target_url, s.get("roster_target_url"))
-            self._set_str(self.var_roster_traffic_sheet, s.get("roster_traffic_sheet"), "引流")
+            self._set_str(self.var_roster_traffic_sheet, s.get("roster_traffic_sheet"), "流量")
             self._set_str(self.var_roster_date_start, s.get("roster_date_start_row"), "24")
             self._set_roster_columns(s.get("roster_columns") or [])
             return
@@ -3177,7 +3177,7 @@ class DesktopApp(tk.Tk):
         self._set_str(self.var_output_start_row, s.get("output_start_row"), "1")
         self._set_bool(self.var_include_headers, s.get("include_headers"))
         self._set_str(self.var_hot_target_url, s.get("hot_target_url"))
-        self._set_str(self.var_hot_output_sheet, s.get("hot_output_sheet"), "点赞1000以上")
+        self._set_str(self.var_hot_output_sheet, s.get("hot_output_sheet"), "高亮结果")
         self._set_str(self.var_hot_start_row, s.get("hot_start_row"), "1")
         self._set_bool(self.var_hot_include_headers, s.get("hot_include_headers"), True)
         self._set_str(self.var_cf_url, s.get("cf_publish_url"))
@@ -3191,7 +3191,7 @@ class DesktopApp(tk.Tk):
         self._set_str(self.var_date_field, s.get("date_field"), "发布日期")
         self._set_str(self.var_sort_field, s.get("sort_field"), "点赞")
         self._set_bool(self.var_sort_desc, s.get("sort_descending"), True)
-        self._set_src(self.src_box, "_src_rows", "例如：管理组", self.src_count, s.get("sources") or s.get("source_urls"))
+        self._set_src(self.src_box, "_src_rows", "例如：分组A", self.src_count, s.get("sources") or s.get("source_urls"))
         wanted = s.get("fields") or copy_default_fields()
         if len(self._field_rows) != len(wanted):
             for row in list(self._field_rows):
@@ -3332,7 +3332,7 @@ class DesktopApp(tk.Tk):
         self.var_output_start_row.set(str(cfg.output_start_row or 1))
         self.var_include_headers.set(bool(cfg.include_headers))
         self.var_hot_target_url.set(cfg.hot_target_url or "")
-        self.var_hot_output_sheet.set(cfg.hot_output_sheet or "点赞1000以上")
+        self.var_hot_output_sheet.set(cfg.hot_output_sheet or "高亮结果")
         self.var_hot_start_row.set(str(cfg.hot_start_row or 1))
         self.var_hot_include_headers.set(bool(cfg.hot_include_headers))
         self.var_cf_url.set(cfg.cf_publish_url or "")
@@ -3393,7 +3393,7 @@ class DesktopApp(tk.Tk):
                     "pa_link_col": getattr(cfg, "pa_link_col", "K"),
                     "pa_tag_col": getattr(cfg, "pa_tag_col", "L"),
                     "pa_include_tag": getattr(cfg, "pa_include_tag", True),
-                    "pa_sub_sheet": getattr(cfg, "pa_sub_sheet", "订阅"),
+                    "pa_sub_sheet": getattr(cfg, "pa_sub_sheet", "明细"),
                     "pa_source_cols": getattr(cfg, "pa_source_cols", None),
                     "pa_date_filter_enabled": getattr(cfg, "pa_date_filter_enabled", True),
                     "pa_date_col": getattr(cfg, "pa_date_col", "M"),
@@ -3401,7 +3401,7 @@ class DesktopApp(tk.Tk):
                     "pa_end_date": getattr(cfg, "pa_end_date", ""),
                     "pa_lookup_enabled": getattr(cfg, "pa_lookup_enabled", True),
                     "pa_lookup_url": getattr(cfg, "pa_lookup_url", ""),
-                    "pa_lookup_sheet": getattr(cfg, "pa_lookup_sheet", "当月贴文库"),
+                    "pa_lookup_sheet": getattr(cfg, "pa_lookup_sheet", "对照表"),
                     "pa_lookup_key_col": getattr(cfg, "pa_lookup_key_col", "B"),
                     "pa_lookup_value_col": getattr(cfg, "pa_lookup_value_col", "N"),
                     "pa_match_col": getattr(cfg, "pa_match_col", "J"),
@@ -3450,7 +3450,7 @@ class DesktopApp(tk.Tk):
         self.var_roster_config_sheet.set(getattr(cfg, "roster_config_sheet", "") or "")
         self.var_roster_start_row.set(str(getattr(cfg, "roster_start_row", 2) or 2))
         self.var_roster_target_url.set(getattr(cfg, "roster_target_url", "") or "")
-        self.var_roster_traffic_sheet.set(getattr(cfg, "roster_traffic_sheet", "引流") or "引流")
+        self.var_roster_traffic_sheet.set(getattr(cfg, "roster_traffic_sheet", "流量") or "流量")
         self.var_roster_date_start.set(str(getattr(cfg, "roster_date_start_row", 24) or 24))
         if template in (None, "", "roster"):
             self._set_roster_columns(getattr(cfg, "roster_columns", None) or [])
@@ -3475,7 +3475,7 @@ class DesktopApp(tk.Tk):
         if template in (None, "", "video", "custom"):
             self._set_vd_columns(getattr(cfg, "vd_columns", None) or [])
         if template in (None, "", "filter"):
-            self._set_src(self.src_box, "_src_rows", "例如：管理组", self.src_count, cfg.sources or cfg.source_urls)
+            self._set_src(self.src_box, "_src_rows", "例如：分组A", self.src_count, cfg.sources or cfg.source_urls)
             for r in list(self._field_rows):
                 r.destroy()
             self._field_rows = []
@@ -3522,7 +3522,7 @@ class DesktopApp(tk.Tk):
                 cfg.pa_schedule_enabled = False
                 save_config(cfg)
                 if not quiet:
-                    messagebox.showwarning("数据汇总工具", "贴文汇总定时需要先填写数据列表表格链接")
+                    messagebox.showwarning("数据汇总工具", "多表汇总定时需要先填写数据列表表格链接")
         self._sync_schedulers()
         if not quiet:
             self._append_log("已保存配置，各菜单的定时会按各自间隔执行")
@@ -3579,7 +3579,7 @@ class DesktopApp(tk.Tk):
             messagebox.showwarning("数据汇总工具", err)
             return
         self._log_n = 0
-        self._append_log("贴文汇总已加入队列")
+        self._append_log("多表汇总已加入队列")
         self._set_badge("排队中", C["accent"])
 
     def _run_roster(self) -> None:
@@ -3707,9 +3707,9 @@ class DesktopApp(tk.Tk):
             date_skip = int(result.get("date_skipped") or 0)
             library_added = int(result.get("library_added") or 0)
             library_skipped = int(result.get("library_skipped") or 0)
-            parts = [f"整合表 {added} 行", f"贴文库新增 {library_added} 行", f"成功 {ok_sheets} 个订阅表"]
+            parts = [f"整合表 {added} 行", f"对照表新增 {library_added} 行", f"成功 {ok_sheets} 个明细表"]
             if library_skipped:
-                parts.append(f"贴文库已有跳过 {library_skipped}")
+                parts.append(f"对照表已有跳过 {library_skipped}")
             if failed:
                 parts.append(f"失败 {failed}")
             if date_skip:

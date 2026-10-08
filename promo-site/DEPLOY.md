@@ -15,7 +15,7 @@
 2. 填写自己的网站域名，例如 `gallery.example.com`
 3. 点 **生成密钥并部署**
 
-软件会自动：建 R2 桶、建 Pages 项目、生成 `CACHE_PUBLISH_SECRET`、换好域名、把发布地址写回第 4 步。域名需要已经加在这个 Cloudflare 账号下，才会自动写 CNAME。
+软件会自动：建 R2 桶、建 Pages 项目、生成发布密钥、换好域名、把发布地址写回第 4 步。域名需要已经加在这个 Cloudflare 账号下，才会自动写 CNAME。
 
 下面的命令行方案留给改代码、或不用这套软件的人。
 
@@ -27,14 +27,14 @@
 只用数据汇总工具做表格？
   └─ 不用部署。软件顶部「设置」加服务账号即可。
 
-要把图库发到已经在跑的 promo.zhixianglife.com？
-  └─ 不用部署。软件第 4 步填发布地址 + CACHE_PUBLISH_SECRET。
+要把图库发到已经在跑的站点（例如 gallery.example.com）？
+  └─ 不用部署。软件第 4 步填发布地址 + 发布密钥。
      注意：会覆盖这座站现有 CDN 数据。密钥不要给外人。
 
 要自己的独立图库网站？
   └─ 必须部署（方案 B）。
 
-只是更新现有 promo.zhixianglife.com 的网页/接口代码？
+只是更新现有图库的网页/接口代码？
   └─ 方案 A，重新发布 Pages，不要新建项目、不要新建桶。
 ```
 
@@ -47,8 +47,8 @@ Read this whole file before running commands. Do not invent Cloudflare resources
 ### Non-negotiable
 
 - Working directory for deploy commands: `promo-site/` (this folder).
-- Never deploy this folder to Pages project `q-gallery` (that is creatives.zhixianglife.com).
-- Never commit secrets, `.wrangler/`, or real `CACHE_PUBLISH_SECRET` values.
+- Never deploy this folder onto another live Pages project that already serves a different site.
+- Never commit secrets, `.wrangler/`, or real publish-secret values.
 - Binding name in code is **`GALLERY_CACHE`**. Do not rename the binding.
 - R2 object prefix is hardcoded as `promo/manifest.json` and `promo/chunks/`. Do not change JS prefix unless you also change every HTML `Q_GALLERY_DRIVE_CACHE_MANIFEST_URL`.
 - `api/*.js` is legacy Vercel. Cloudflare uses `functions/api/*.js`. Deploy with Wrangler Pages, not `vercel`.
@@ -57,46 +57,46 @@ Read this whole file before running commands. Do not invent Cloudflare resources
 
 ### Ask the user (do not guess)
 
-1. Track A (update existing `q-gallery-promo`) or Track B (brand-new independent gallery)?
+1. Track A (update an existing gallery the user already owns) or Track B (brand-new independent gallery)?
 2. Cloudflare account login is available? (`npx wrangler login`)
 3. Track B only: new Pages project name, new R2 bucket name, site hostname, R2 public hostname.
-4. Track B only: generate or receive `CACHE_PUBLISH_SECRET` (do not echo it back in logs/chat if they paste it).
+4. Track B only: generate or receive the publish secret (do not echo it back in logs/chat if they paste it).
 
 ### Track A — update existing production
 
-Keep `wrangler.toml` as-is (`name = "q-gallery-promo"`, `bucket_name = "q-gallery-json-cache"`).
+Keep `wrangler.toml` pointing at the user's existing Pages project and R2 bucket.
 
 ```bash
 cd promo-site
 npx wrangler login
-npx wrangler pages deploy . --project-name=q-gallery-promo --commit-dirty=true --branch=production
+npx wrangler pages deploy . --project-name=<EXISTING_PROJECT> --commit-dirty=true --branch=production
 ```
 
-Do not recreate the R2 bucket. Do not rotate `CACHE_PUBLISH_SECRET` unless asked. Verify:
+Do not recreate the R2 bucket. Do not rotate the publish secret unless asked. Verify:
 
 ```bash
-curl -sS -o NUL -w "%{http_code}" https://promo.zhixianglife.com/
-curl -sS -X POST https://promo.zhixianglife.com/api/publish-cache
+curl -sS -o NUL -w "%{http_code}" https://gallery.example.com/
+curl -sS -X POST https://gallery.example.com/api/publish-cache
 ```
 
 POST without secret should return 401 JSON, not 404/500.
 
 ### Track B — new independent gallery
 
-1. Copy `promo-site/` (or use this folder if the user is not the zhixianglife owner).
+1. Copy `promo-site/` (or use this folder for a new independent site).
 2. Edit `wrangler.toml`:
-   - `name = "<new-pages-project>"` (not `q-gallery-promo`)
-   - `bucket_name = "<new-r2-bucket>"` (not `q-gallery-json-cache`)
+   - `name = "<new-pages-project>"` (do not reuse another live site's project name)
+   - `bucket_name = "<new-r2-bucket>"` (do not reuse another live site's bucket)
 3. Replace hardcoded CDN in these four files with `https://<R2_PUBLIC_HOST>/promo/manifest.json`:
    - `index.html`
    - `leaderboard.html`
    - `likes-leaderboard.html`
    - `water-leaderboard.html`
-   Clear or remove `Q_GALLERY_DRIVE_FALLBACK_MANIFEST_URL` if it still points at the zhixianglife Drive file id.
+   Clear or remove `Q_GALLERY_DRIVE_FALLBACK_MANIFEST_URL` if it still points at another site's Drive file.
 4. Create bucket, deploy, bind (toml binding is enough on deploy), set secrets, attach domains.
 5. Tell the user to put this in the desktop app:
    - 发布地址: `https://<SITE_HOST>/api/publish-cache`
-   - CACHE_PUBLISH_SECRET: the same secret just stored in Cloudflare
+   - 发布密钥: the same secret just stored in Cloudflare
 
 Exact commands are in §方案 B.
 
@@ -105,36 +105,37 @@ Exact commands are in §方案 B.
 - Pages URL opens the gallery HTML.
 - `POST /api/publish-cache` without secret → 401.
 - R2 public `GET https://<R2_PUBLIC_HOST>/promo/manifest.json` works after first successful publish (404 before first publish is OK).
-- Desktop app can 发布图库 to the new URL with the new secret without touching promo.zhixianglife.com.
+- Desktop app can 发布图库 to the new URL with the new secret without touching any other live gallery.
 
 ---
 
-## 现有生产环境（方案 A 用这些值，方案 B 不要复用）
+## 现有生产环境（方案 A 用你自己的值，方案 B 不要复用）
 
-| 项 | 值 |
+下面是示例，请换成实际项目和域名：
+
+| 项 | 示例 |
 |---|---|
-| Pages 项目 | `q-gallery-promo` |
-| 站点 | https://promo.zhixianglife.com |
-| Pages 默认域名 | https://q-gallery-promo.pages.dev |
-| 发布接口 | https://promo.zhixianglife.com/api/publish-cache |
-| R2 桶 | `q-gallery-json-cache` |
+| Pages 项目 | `your-gallery-project` |
+| 站点 | https://gallery.example.com |
+| Pages 默认域名 | https://your-gallery-project.pages.dev |
+| 发布接口 | https://gallery.example.com/api/publish-cache |
+| R2 桶 | `your-gallery-cache` |
 | R2 绑定名 | `GALLERY_CACHE` |
 | 桶内前缀 | `promo/` |
-| 浏览器读的 CDN | https://gallery-cache.zhixianglife.com/promo/manifest.json |
-| 素材库（禁止动） | Pages `q-gallery` → https://creatives.zhixianglife.com |
+| 浏览器读的 CDN | https://cdn.example.com/promo/manifest.json |
 
-页面路径：`/` 素材列表，`/leaderboard` 引流榜，`/likes-leaderboard` 点赞榜，`/water-leaderboard` 水滴榜。
+页面路径：`/` 列表，`/leaderboard` 排行，`/likes-leaderboard` 点赞榜，`/water-leaderboard` 其它排行。
 
 ---
 
 ## 方案 A：更新现有站点（你自己改代码后重新发布）
 
-适合：已经有 `promo.zhixianglife.com`，只是改了 `promo-site` 里的网页或接口。
+适合：已经有图库站点（例如 `gallery.example.com`），只是改了 `promo-site` 里的网页或接口。
 
 ### 准备
 
 - 本机 Node.js 18+
-- Cloudflare 账号能进项目 `q-gallery-promo`
+- Cloudflare 账号能进该图库的 Pages 项目
 - 在 `promo-site` 目录执行命令
 
 ### 步骤
@@ -154,27 +155,27 @@ npx wrangler login
 3. 发布到现有项目（不要改项目名）：
 
 ```bash
-npx wrangler pages deploy . --project-name=q-gallery-promo --commit-dirty=true --branch=production
+npx wrangler pages deploy . --project-name=<EXISTING_PROJECT> --commit-dirty=true --branch=production
 ```
 
-4. 打开 https://promo.zhixianglife.com 看页面是否更新。
+4. 打开 https://gallery.example.com 看页面是否更新。
 
-5. 软件里的发布地址和密钥**不用改**，除非你主动轮换了 `CACHE_PUBLISH_SECRET`。
+5. 软件里的发布地址和密钥**不用改**，除非你主动轮换了发布密钥。
 
-密钥仍在：Cloudflare Dashboard → **Workers 和 Pages** → **q-gallery-promo** → **Settings** → **Variables and Secrets** → Production → `CACHE_PUBLISH_SECRET`。
+密钥仍在：Cloudflare Dashboard → **Workers 和 Pages** → 你的项目 → **Settings** → **Variables and Secrets** → Production → 发布密钥。
 
 ---
 
 ## 方案 B：部署一座独立图库（别人或另一套数据）
 
-别人要用自己的图库网站时走这里。结果是**另一座站**，不会覆盖 `promo.zhixianglife.com`。
+别人要用自己的图库网站时走这里。结果是**另一座站**，不会覆盖已有图库。
 
 下面用占位符，请换成自己的名字：
 
 | 占位符 | 例子 | 说明 |
 |---|---|---|
-| `<PROJECT>` | `my-gallery-promo` | Cloudflare Pages 项目名，不能叫 `q-gallery` / `q-gallery-promo` |
-| `<BUCKET>` | `my-gallery-json-cache` | 新的 R2 桶，不要用 `q-gallery-json-cache` |
+| `<PROJECT>` | `my-gallery` | Cloudflare Pages 项目名，不要复用其它已上线站点的项目名 |
+| `<BUCKET>` | `my-gallery-cache` | 新的 R2 桶，不要复用其它已上线站点的桶 |
 | `<SITE_HOST>` | `gallery.example.com` 或 `my-gallery-promo.pages.dev` | 浏览器用的网站 |
 | `<R2_PUBLIC_HOST>` | `cdn.example.com` 或 R2 自定义域 | 浏览器直读 JSON 的域名，不要带 `https://` 末尾斜杠 |
 | `<SECRET>` | 自己生成的 32 位以上随机串 | 发布密码，只放 Cloudflare 和软件里 |
@@ -209,7 +210,7 @@ window.Q_GALLERY_DRIVE_CACHE_MANIFEST_URL =
 window.Q_GALLERY_DRIVE_FALLBACK_MANIFEST_URL = "";
 ```
 
-不要再指向 `gallery-cache.zhixianglife.com`，否则页面仍显示别人的图库。
+不要再指向其它站点的 CDN，否则页面仍显示别人的图库。
 
 ### B2. 登录并建 R2 桶
 
@@ -254,7 +255,7 @@ npx wrangler pages secret put PUBLIC_CACHE_BASE --project-name=<PROJECT>
 ```
 
 `PUBLIC_CACHE_BASE` 填 `https://<R2_PUBLIC_HOST>`（无末尾 `/`）。  
-接口写进 manifest 的分片 URL 靠这个值。不设的话代码会错误地默认成 `https://gallery-cache.zhixianglife.com`。
+接口写进 manifest 的分片 URL 靠这个值。独立站必须设置，否则页面会去读错误的 CDN。
 
 | 变量 | 必填 | 作用 |
 |---|---|---|
@@ -276,12 +277,12 @@ Dashboard：Pages 项目 → **Custom domains** → 添加 `<SITE_HOST>`。
 
 ### B7. 填回数据汇总工具
 
-贴文筛选汇总 → 展开第 4 步：
+数据筛选汇总 → 展开第 4 步：
 
 | 栏 | 填 |
 |---|---|
 | 发布地址 | `https://<SITE_HOST>/api/publish-cache` |
-| CACHE_PUBLISH_SECRET | 与 Cloudflare 中同一串 |
+| 发布密钥 | 与 Cloudflare 中同一串 |
 
 保存，点顶部 **发布图库**。第一次成功后，打开：
 
@@ -352,7 +353,7 @@ Content-Type: application/json
 - [ ] 四个 HTML 的 `Q_GALLERY_DRIVE_CACHE_MANIFEST_URL` 指向自己的 CDN
 - [ ] 软件第 4 步地址是 `https://<SITE_HOST>/api/publish-cache`
 - [ ] 点「发布图库」成功后，`https://<R2_PUBLIC_HOST>/promo/manifest.json` 能打开 JSON
-- [ ] 独立站没有改到 `q-gallery` / `creatives.zhixianglife.com`
+- [ ] 独立站没有改到其它已上线站点的 Pages 项目或域名
 - [ ] 密钥没有提交到 git
 
 ---
@@ -366,9 +367,9 @@ Content-Type: application/json
 | 密钥不一致 | 软件和 Cloudflare 不是同一串；刚改过密钥要两边一起改 |
 | R2 binding GALLERY_CACHE missing | `wrangler.toml` 未绑定，或绑到了别的 binding 名 |
 | 404 on `/api/publish-cache` | 项目名发错，或发到了没有 `functions/api/publish-cache.js` 的旧目录 |
-| 页面一直是别人的图库 | HTML 仍指向 `gallery-cache.zhixianglife.com` |
+| 页面一直是别人的图库 | HTML 仍指向其它站点的 CDN |
 | 发布成功但网页是空的 | `PUBLIC_CACHE_BASE` 或 HTML CDN 和 R2 公开域不一致；或桶未公开 |
-| 误覆盖现有图库 | 用了 `q-gallery-promo` + 现有密钥。独立站必须换项目名、换桶、换密钥 |
+| 误覆盖现有图库 | 复用了已有站点的项目名和密钥。独立站必须换项目名、换桶、换密钥 |
 
 ---
 
