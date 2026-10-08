@@ -20,16 +20,16 @@ function isAllowedUrl(value) {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:") return false;
-    return [
-      "drive.google.com",
-      "drive.usercontent.google.com",
-      "docs.google.com",
-      "googleusercontent.com",
-      "zhixianglife.com",
-      "r2.dev",
-      "cloudflarestorage.com",
-      "pages.dev",
-    ].some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`));
+    const host = url.hostname.toLowerCase();
+    if (
+      host === "drive.google.com" ||
+      host === "drive.usercontent.google.com" ||
+      host === "docs.google.com" ||
+      host === "lh3.googleusercontent.com"
+    ) {
+      return true;
+    }
+    return host === "zhixianglife.com" || host.endsWith(".zhixianglife.com");
   } catch {
     return false;
   }

@@ -1,4 +1,4 @@
-import { isAuthenticated, authCookieHeader, json, readJsonBody, getAccessPassword } from "../_lib/auth.js";
+import { isAuthenticated, authCookieHeader, json, readJsonBody, getAccessPassword, secretsEqual } from "../_lib/auth.js";
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -23,7 +23,7 @@ export async function onRequest(context) {
 
   if (action === "login") {
     const password = getAccessPassword(env);
-    if (!password || body.password === password) {
+    if (!password || (await secretsEqual(body.password, password))) {
       return json(
         { ok: true, authenticated: true },
         200,

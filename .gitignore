@@ -11,6 +11,11 @@ cloudflare.json
 sync_state.json
 credentials.json
 credentials-*.json
+as-*.json
+*.pem
+id_rsa
+id_rsa.*
+SECURITY-AUDIT*.md
 logs/
 *.log
 .DS_Store

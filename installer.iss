@@ -9,9 +9,9 @@
 AppId={{9D47EB5B-1B34-4AE5-88D3-C3B20D8AC104}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-AppPublisher=secure-artifacts
-AppPublisherURL=https://github.com/secure-artifacts/sheets-post-filter
-AppUpdatesURL=https://github.com/secure-artifacts/sheets-post-filter/releases/latest
+AppPublisher=christiancagfr-alt
+AppPublisherURL=https://github.com/christiancagfr-alt/sheets-post-filter
+AppUpdatesURL=https://github.com/christiancagfr-alt/sheets-post-filter/releases/latest
 DefaultDirName={localappdata}\sheets-post-filter
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes

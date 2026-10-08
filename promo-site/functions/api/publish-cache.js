@@ -5,8 +5,7 @@
  *
  * Body:
  *  - { manifestUrl } 镜像全部分片
- *  - { action: "set-fb-token", fbAccessToken } 仅同步头像 token（无需重导）
- *  - 也可在镜像时附带 fbAccessToken
+ *  头像 token 请放到 Pages 密钥 FB_GRAPH_ACCESS_TOKEN，不再写入公开 R2。
  */
 import {
   CHUNK_PREFIX,
@@ -48,7 +47,10 @@ export async function onRequestPost(context) {
   if (!secret) {
     return json({ ok: false, error: "Unauthorized. 缺少 x-publish-secret 请求头。" }, 401);
   }
-  if (secret !== expected) {
+  const enc = new TextEncoder();
+  const left = await crypto.subtle.digest("SHA-256", enc.encode("cmp|" + secret));
+  const right = await crypto.subtle.digest("SHA-256", enc.encode("cmp|" + expected));
+  if (!crypto.subtle.timingSafeEqual(left, right)) {
     return json({ ok: false, error: "Unauthorized. 发布密钥与 Cloudflare CACHE_PUBLISH_SECRET 不一致。" }, 401);
   }
 
@@ -61,6 +63,9 @@ export async function onRequestPost(context) {
 
   const tokenFromBody = String(body.fbAccessToken || body.facebookAccessToken || "").trim();
   const action = String(body.action || "").trim().toLowerCase();
+  if (tokenFromBody) {
+    await deleteLegacyFbToken(env);
+  }
 
   // Python 汇总工具直推：分片写入 R2，不再经过 Apps Script / Drive
   if (action === "put-chunk" || action === "finalize") {
@@ -73,42 +78,26 @@ export async function onRequestPost(context) {
     }
   }
 
-  // 仅同步 token（Apps Script qGallerySyncFbAvatarToken）
   if (action === "set-fb-token" || (tokenFromBody && !body.manifestUrl && action !== "mirror")) {
-    if (!tokenFromBody || tokenFromBody.length < 20) {
-      return json({ ok: false, error: "fbAccessToken missing or too short" }, 400);
-    }
-    try {
-      await storeFbAccessToken(env, tokenFromBody);
-      return json({
-        ok: true,
-        action: "set-fb-token",
-        tokenLength: tokenFromBody.length,
-        hint: "头像代理 /api/avatar?id= 已可使用真实 Graph 头像",
-      });
-    } catch (error) {
-      return json({ ok: false, error: error.message || String(error) }, 502);
-    }
+    return json(
+      {
+        ok: false,
+        error:
+          "Facebook 头像 token 请写入 Cloudflare Pages 密钥 FB_GRAPH_ACCESS_TOKEN，不要再写到 R2 公开前缀。",
+      },
+      400
+    );
   }
 
   try {
-    if (tokenFromBody) {
-      try {
-        await storeFbAccessToken(env, tokenFromBody);
-      } catch (e) {
-        // 镜像仍继续，token 写入失败只记 hint
-        console.warn("store fb token failed", e);
-      }
-    }
-
     const result = await mirrorManifestToR2(
       env,
       normalizeDriveUrl(body.manifestUrl || env.DRIVE_CACHE_MANIFEST_URL || "")
     );
     return json({
       ...result,
-      fbTokenStored: Boolean(tokenFromBody),
-      hint: "前端读 publicManifestUrl（CDN，0 Functions）",
+      fbTokenStored: false,
+      hint: "前端读 publicManifestUrl（CDN，0 Functions）。头像 token 请用 Pages 密钥 FB_GRAPH_ACCESS_TOKEN。",
     });
   } catch (error) {
     const status = error.code === "NO_R2" ? 501 : error.code === "NO_MANIFEST" ? 400 : 502;
@@ -141,8 +130,9 @@ async function publishDirectToR2(env, action, body) {
 
   if (action === "put-chunk") {
     const index = Number(body.index || 0);
-    if (!Number.isFinite(index) || index < 1) throw new Error("index must be >= 1");
+    if (!Number.isFinite(index) || index < 1 || index > 2000) throw new Error("index must be 1..2000");
     const assets = Array.isArray(body.assets) ? body.assets : [];
+    if (assets.length > 5000) throw new Error("too many assets in chunk");
     const key = `${CHUNK_PREFIX}${pad4(index)}.json`;
     const payload = JSON.stringify({
       ok: true,
@@ -154,6 +144,7 @@ async function publishDirectToR2(env, action, body) {
       maxDate: body.maxDate || "",
       assets,
     });
+    if (payload.length > 6 * 1024 * 1024) throw new Error("chunk payload too large");
     await env.GALLERY_CACHE.put(key, payload, {
       httpMetadata: {
         contentType: "application/json; charset=utf-8",
@@ -172,7 +163,7 @@ async function publishDirectToR2(env, action, body) {
   }
 
   const chunkCount = Number(body.chunkCount || 0);
-  if (!chunkCount) throw new Error("chunkCount required");
+  if (!chunkCount || chunkCount < 1 || chunkCount > 2000) throw new Error("chunkCount must be 1..2000");
   const publishedChunks = [];
   for (let i = 1; i <= chunkCount; i += 1) {
     const name = `${CHUNK_PREFIX}${pad4(i)}.json`;
@@ -235,21 +226,11 @@ async function publishDirectToR2(env, action, body) {
   };
 }
 
-async function storeFbAccessToken(env, token) {
-  if (!env.GALLERY_CACHE || typeof env.GALLERY_CACHE.put !== "function") {
-    const err = new Error("R2 binding GALLERY_CACHE missing");
-    err.code = "NO_R2";
-    throw err;
+async function deleteLegacyFbToken(env) {
+  if (!env.GALLERY_CACHE || typeof env.GALLERY_CACHE.delete !== "function") return;
+  try {
+    await env.GALLERY_CACHE.delete(FB_TOKEN_R2_KEY);
+  } catch {
+    // ignore missing key
   }
-  await env.GALLERY_CACHE.put(FB_TOKEN_R2_KEY, token, {
-    httpMetadata: {
-      contentType: "text/plain; charset=utf-8",
-      // 不走公共长缓存
-      cacheControl: "private, no-store",
-    },
-    customMetadata: {
-      updatedAt: new Date().toISOString(),
-      purpose: "fb-graph-avatar",
-    },
-  });
 }

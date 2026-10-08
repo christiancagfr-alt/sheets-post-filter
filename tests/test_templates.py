@@ -101,6 +101,30 @@ class TemplateConfigTests(unittest.TestCase):
         for key in ("ui_menus", "catalog_url_col", "align_mappings", "vd_columns"):
             self.assertIn(key, cfg)
 
+    def test_config_api_masks_publish_secret(self):
+        secret = "real-publish-secret-value"
+        payload = app._redact_config_payload(app.Config(cf_publish_secret=secret, ui_menus=[
+            {"id": "filter-default", "settings": {"cf_publish_secret": secret}}
+        ]))
+        self.assertEqual(payload["cf_publish_secret"], "********")
+        self.assertEqual(payload["ui_menus"][0]["settings"]["cf_publish_secret"], "********")
+
+    def test_payload_keeps_existing_secret_when_masked(self):
+        stored = app.Config(cf_publish_secret="keep-me", ui_menus=[
+            {"id": "filter-default", "name": "贴文", "template": "filter", "settings": {"cf_publish_secret": "keep-me"}}
+        ])
+        cfg = app._cfg_from_payload(
+            {
+                "cf_publish_secret": "********",
+                "ui_menus": [
+                    {"id": "filter-default", "name": "贴文", "template": "filter", "settings": {"cf_publish_secret": "********"}}
+                ],
+            },
+            base=stored,
+        )
+        self.assertEqual(cfg.cf_publish_secret, "keep-me")
+        self.assertEqual(cfg.ui_menus[0]["settings"]["cf_publish_secret"], "keep-me")
+
     def test_original_video_template_keeps_log_by_default(self):
         self.assertTrue(app.Config().vd_write_log)
 

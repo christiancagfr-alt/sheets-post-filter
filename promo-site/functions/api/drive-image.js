@@ -17,8 +17,13 @@ function driveFileId(value) {
     const idMatch = text.match(/[?&]id=([^&#]+)/i);
     if (idMatch) return decodeURIComponent(idMatch[1]);
   }
-  if (/^[a-zA-Z0-9_-]{20,}$/.test(text)) return text;
+  if (/^[a-zA-Z0-9_-]{20,128}$/.test(text)) return text;
   return "";
+}
+
+function safeDriveFileId(value) {
+  const id = driveFileId(value);
+  return /^[a-zA-Z0-9_-]{20,128}$/.test(id) ? id : "";
 }
 
 function candidatesFor(id) {
@@ -34,7 +39,7 @@ function candidatesFor(id) {
 export async function onRequestGet(context) {
   const { request } = context;
   const reqUrl = new URL(request.url);
-  const id = driveFileId(reqUrl.searchParams.get("id") || reqUrl.searchParams.get("url") || "");
+  const id = safeDriveFileId(reqUrl.searchParams.get("id") || reqUrl.searchParams.get("url") || "");
   if (!id) {
     return new Response("Missing Drive file id", { status: 400, headers: { "Cache-Control": "no-store" } });
   }

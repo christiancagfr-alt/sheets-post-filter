@@ -69,6 +69,14 @@ a = Analysis(
     noarchive=False,
 )
 
+a.datas = [
+    item
+    for item in a.datas
+    if ".wrangler" not in str(item).replace("\\", "/")
+    and "_test_publish_body.json" not in str(item)
+    and ".env" not in str(item).replace("\\", "/")
+]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

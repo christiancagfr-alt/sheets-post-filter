@@ -112,8 +112,9 @@ function renderMenus() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `menu-item${item.id === activeId ? " on" : ""}`;
-    button.innerHTML = `<span><strong></strong><small>${templateNames[item.template] || item.template}</small></span><span class="menu-more">›</span>`;
+    button.innerHTML = `<span><strong></strong><small></small></span><span class="menu-more">›</span>`;
     button.querySelector("strong").textContent = item.name;
+    button.querySelector("small").textContent = templateNames[item.template] || item.template || "";
     button.addEventListener("click", () => switchMenu(item.id));
     button.addEventListener("dblclick", (event) => { event.preventDefault(); renameActive(item.id); });
     $("menuList").appendChild(button);

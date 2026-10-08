@@ -292,8 +292,62 @@ def stop_all_jobs() -> None:
     threading.Timer(1.0, _stop_all.clear).start()
 
 
+_SECRET_MASK = "********"
+
+
+def _secret_is_placeholder(value: object) -> bool:
+    text = str(value or "").strip()
+    return (not text) or text == _SECRET_MASK or (len(text) >= 8 and set(text) <= {"*"})
+
+
+def _mask_if_set(value: object) -> str:
+    return _SECRET_MASK if str(value or "").strip() else ""
+
+
+def _restore_publish_secrets(cfg: Config, previous: Config) -> None:
+    if _secret_is_placeholder(getattr(cfg, "cf_publish_secret", "")):
+        cfg.cf_publish_secret = previous.cf_publish_secret
+    old_menus = {
+        str(item.get("id") or ""): item
+        for item in (previous.ui_menus or [])
+        if isinstance(item, dict)
+    }
+    restored: list[dict] = []
+    for menu in cfg.ui_menus or []:
+        if not isinstance(menu, dict):
+            continue
+        item = dict(menu)
+        settings = dict(item.get("settings") or {})
+        old = old_menus.get(str(item.get("id") or ""))
+        old_settings = (old.get("settings") or {}) if isinstance(old, dict) else {}
+        if _secret_is_placeholder(settings.get("cf_publish_secret")):
+            settings["cf_publish_secret"] = old_settings.get("cf_publish_secret") or previous.cf_publish_secret
+        item["settings"] = settings
+        restored.append(item)
+    if restored:
+        cfg.ui_menus = restored
+
+
+def _redact_config_payload(cfg: Config) -> dict:
+    menus = []
+    for menu in cfg.ui_menus or []:
+        if not isinstance(menu, dict):
+            continue
+        item = dict(menu)
+        settings = dict(item.get("settings") or {})
+        if "cf_publish_secret" in settings:
+            settings["cf_publish_secret"] = _mask_if_set(settings.get("cf_publish_secret"))
+        item["settings"] = settings
+        menus.append(item)
+    return {
+        "cf_publish_secret": _mask_if_set(cfg.cf_publish_secret),
+        "ui_menus": menus,
+    }
+
+
 def _cfg_from_payload(data: dict, base: Config | None = None) -> Config:
     cfg = load_config() if base is None else copy.deepcopy(base)
+    previous = copy.deepcopy(cfg)
     mapping = {
         "credentials_file": "credentials_file",
         "config_url": "config_url",
@@ -592,6 +646,7 @@ def _cfg_from_payload(data: dict, base: Config | None = None) -> Config:
             cfg.vd_batch_size = max(20, min(500, int(data["vd_batch_size"])))
         except ValueError:
             pass
+    _restore_publish_secrets(cfg, previous)
     return cfg
 
 
@@ -1058,6 +1113,7 @@ def api_config():
         pass
     today = date.today()
     month_start = today.replace(day=1).isoformat()
+    redacted = _redact_config_payload(cfg)
     return jsonify(
         {
             "config": {
@@ -1174,10 +1230,10 @@ def api_config():
                 "pa_schedule_enabled": cfg.pa_schedule_enabled,
                 "pa_schedule_minutes": cfg.pa_schedule_minutes,
                 "catalog_exclude_sheets": cfg.catalog_exclude_sheets,
-                "ui_menus": cfg.ui_menus,
+                "ui_menus": redacted["ui_menus"],
                 "ui_active_menu": cfg.ui_active_menu,
                 "cf_publish_url": cfg.cf_publish_url,
-                "cf_publish_secret": cfg.cf_publish_secret,
+                "cf_publish_secret": redacted["cf_publish_secret"],
                 "cf_publish_after_sync": cfg.cf_publish_after_sync,
                 "cf_publish_source": cfg.cf_publish_source,
             },

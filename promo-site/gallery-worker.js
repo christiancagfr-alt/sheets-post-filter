@@ -6,17 +6,63 @@ const MANIFEST_KEY = "promo/manifest.json";
 const CHUNK_PREFIX = "promo/chunks/";
 const LAST_REFRESH_KEY = "promo/last-refresh.json";
 
+const MAX_CHUNK_INDEX = 2000;
+const MAX_ASSETS_PER_CHUNK = 5000;
+const MAX_CHUNK_BYTES = 6 * 1024 * 1024;
+const MAX_DRIVE_IMAGE_BYTES = 4 * 1024 * 1024;
+
 function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "content-type, x-publish-secret, authorization",
       ...extraHeaders,
     },
   });
+}
+
+async function secretsEqual(left, right) {
+  const enc = new TextEncoder();
+  const a = await crypto.subtle.digest("SHA-256", enc.encode("cmp|" + String(left || "")));
+  const b = await crypto.subtle.digest("SHA-256", enc.encode("cmp|" + String(right || "")));
+  return crypto.subtle.timingSafeEqual(a, b);
+}
+
+function safeDriveFileId(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  let id = "";
+  const fileMatch = text.match(/(?:drive|docs)\.google\.com\/file\/d\/([^/?#]+)/i);
+  const lh3 = text.match(/lh3\.googleusercontent\.com\/d\/([a-zA-Z0-9_-]+)/i);
+  if (fileMatch) id = fileMatch[1];
+  else if (lh3) id = lh3[1];
+  else if (/^[a-zA-Z0-9_-]{20,128}$/.test(text)) id = text;
+  else {
+    const idMatch = text.match(/[?&]id=([^&#]+)/i);
+    if (idMatch) {
+      try {
+        id = decodeURIComponent(idMatch[1]);
+      } catch {
+        id = idMatch[1];
+      }
+    }
+  }
+  return /^[a-zA-Z0-9_-]{20,128}$/.test(id) ? id : "";
+}
+
+function isPublicCacheKey(key) {
+  let normalized = String(key || "");
+  try {
+    normalized = decodeURIComponent(normalized);
+  } catch {
+    return false;
+  }
+  normalized = normalized.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalized || normalized.includes("..") || normalized.includes("\0")) return false;
+  if (normalized.includes("/_internal") || normalized.startsWith("_internal")) return false;
+  if (normalized === "promo/manifest.json" || normalized === "promo/last-refresh.json") return true;
+  return /^promo\/chunks\/[0-9A-Za-z._-]+$/.test(normalized);
 }
 
 function publicBase(env, request) {
@@ -46,7 +92,7 @@ async function handlePublish(request, env) {
   if (!secret) {
     return json({ ok: false, error: "Unauthorized. 缺少 x-publish-secret 请求头。" }, 401);
   }
-  if (secret !== expected) {
+  if (!(await secretsEqual(secret, expected))) {
     return json({ ok: false, error: "Unauthorized. 发布密钥与 Cloudflare CACHE_PUBLISH_SECRET 不一致。" }, 401);
   }
 
@@ -84,8 +130,13 @@ async function publishDirectToR2(env, request, action, body) {
 
   if (action === "put-chunk") {
     const index = Number(body.index || 0);
-    if (!Number.isFinite(index) || index < 1) throw new Error("index must be >= 1");
+    if (!Number.isFinite(index) || index < 1 || index > MAX_CHUNK_INDEX) {
+      throw new Error("index must be 1.." + MAX_CHUNK_INDEX);
+    }
     const assets = Array.isArray(body.assets) ? body.assets : [];
+    if (assets.length > MAX_ASSETS_PER_CHUNK) {
+      throw new Error("too many assets in chunk");
+    }
     const key = `${CHUNK_PREFIX}${pad4(index)}.json`;
     const payload = JSON.stringify({
       ok: true,
@@ -97,6 +148,7 @@ async function publishDirectToR2(env, request, action, body) {
       maxDate: body.maxDate || "",
       assets,
     });
+    if (payload.length > MAX_CHUNK_BYTES) throw new Error("chunk payload too large");
     await env.GALLERY_CACHE.put(key, payload, {
       httpMetadata: {
         contentType: "application/json; charset=utf-8",
@@ -107,7 +159,9 @@ async function publishDirectToR2(env, request, action, body) {
   }
 
   const chunkCount = Number(body.chunkCount || 0);
-  if (!chunkCount) throw new Error("chunkCount required");
+  if (!chunkCount || chunkCount < 1 || chunkCount > MAX_CHUNK_INDEX) {
+    throw new Error("chunkCount must be 1.." + MAX_CHUNK_INDEX);
+  }
   const publishedChunks = [];
   for (let i = 1; i <= chunkCount; i += 1) {
     const name = `${CHUNK_PREFIX}${pad4(i)}.json`;
@@ -151,7 +205,7 @@ async function publishDirectToR2(env, request, action, body) {
 async function handleCdn(request, env) {
   const url = new URL(request.url);
   const key = url.pathname.replace(/^\/cdn\/+/, "");
-  if (!key || key.includes("..")) return new Response("Not found", { status: 404 });
+  if (!isPublicCacheKey(key)) return new Response("Not found", { status: 404 });
   if (!env.GALLERY_CACHE || typeof env.GALLERY_CACHE.get !== "function") {
     return new Response("R2 binding GALLERY_CACHE missing", { status: 501 });
   }
@@ -185,7 +239,8 @@ function parseCookies(header) {
 }
 
 async function signValue(value, env) {
-  const secret = String(env.AUTH_SECRET || env.CACHE_PUBLISH_SECRET || accessPassword(env) || "q-gallery").trim() || "q-gallery";
+  const secret = String(env.AUTH_SECRET || env.CACHE_PUBLISH_SECRET || accessPassword(env) || "").trim();
+  if (!secret) return "";
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
@@ -201,7 +256,7 @@ async function isAuthenticated(request, env) {
   const password = accessPassword(env);
   if (!password) return true;
   const cookies = parseCookies(request.headers.get("cookie") || "");
-  return cookies[AUTH_COOKIE] === (await signValue(password, env));
+  return secretsEqual(cookies[AUTH_COOKIE], await signValue(password, env));
 }
 
 async function authCookieHeader(env, clear) {
@@ -232,7 +287,7 @@ async function handleAuth(request, env) {
   }
   if (action === "login") {
     const password = accessPassword(env);
-    if (!password || body.password === password) {
+    if (!password || (await secretsEqual(body.password, password))) {
       return json({ ok: true, authenticated: true }, 200, { "Set-Cookie": await authCookieHeader(env, false) });
     }
     return json({ ok: false, authenticated: false, error: "密码错误。" }, 401);
@@ -242,33 +297,28 @@ async function handleAuth(request, env) {
 
 async function handleDriveImage(request) {
   const reqUrl = new URL(request.url);
-  const raw = String(reqUrl.searchParams.get("id") || reqUrl.searchParams.get("url") || "").trim();
-  let id = "";
-  const fileMatch = raw.match(/(?:drive|docs)\.google\.com\/file\/d\/([^/?#]+)/i);
-  const lh3 = raw.match(/lh3\.googleusercontent\.com\/d\/([a-zA-Z0-9_-]+)/i);
-  if (fileMatch) id = fileMatch[1];
-  else if (lh3) id = lh3[1];
-  else if (/^[a-zA-Z0-9_-]{20,}$/.test(raw)) id = raw;
-  else {
-    const idMatch = raw.match(/[?&]id=([^&#]+)/i);
-    if (idMatch) id = decodeURIComponent(idMatch[1]);
-  }
+  const id = safeDriveFileId(reqUrl.searchParams.get("id") || reqUrl.searchParams.get("url") || "");
   if (!id) return new Response("Missing Drive file id", { status: 400 });
   const targets = [
-    `https://lh3.googleusercontent.com/d/${id}`,
+    `https://lh3.googleusercontent.com/d/${encodeURIComponent(id)}`,
     `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w1000`,
     `https://drive.google.com/uc?export=view&id=${encodeURIComponent(id)}`,
   ];
   for (const target of targets) {
     try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
       const upstream = await fetch(target, {
         redirect: "follow",
+        signal: controller.signal,
         headers: { Accept: "image/*,*/*;q=0.8", "User-Agent": "q-gallery-promo-drive-image/1.0" },
       });
+      clearTimeout(timer);
       const type = String(upstream.headers.get("content-type") || "").toLowerCase();
       if (!upstream.ok || type.includes("text/html")) continue;
+      if (type && !type.startsWith("image/") && !type.includes("octet-stream")) continue;
       const buffer = await upstream.arrayBuffer();
-      if (!buffer.byteLength) continue;
+      if (!buffer.byteLength || buffer.byteLength > MAX_DRIVE_IMAGE_BYTES) continue;
       return new Response(buffer, {
         status: 200,
         headers: {
@@ -287,10 +337,13 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") {
+      if (url.pathname === "/api/publish-cache") {
+        return new Response(null, { status: 204 });
+      }
       return new Response(null, {
         headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Headers": "content-type, x-publish-secret, authorization",
+          "Access-Control-Allow-Origin": url.origin,
+          "Access-Control-Allow-Headers": "content-type",
           "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
         },
       });

@@ -10,7 +10,6 @@
 import { isAuthenticated, json, readJsonBody } from "../_lib/auth.js";
 import {
   mirrorManifestToR2,
-  normalizeDriveUrl,
   readLastRefresh,
   defaultManifestUrl,
 } from "../_lib/mirror-cache.js";
@@ -55,9 +54,7 @@ export async function onRequestPost(context) {
     }
   }
 
-  const manifestUrl = normalizeDriveUrl(
-    body.manifestUrl || defaultManifestUrl(env)
-  );
+  const manifestUrl = defaultManifestUrl(env);
 
   try {
     const result = await mirrorManifestToR2(env, manifestUrl);

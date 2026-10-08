@@ -3,10 +3,10 @@
  * Worker 在境外拉取后回源同域，并加长缓存。
  *
  * 真实头像需要 Facebook access_token（无 token 时 Graph 只返回灰色默认剪影）。
- * token 来源优先级：
+ * token 来源：
  *  1) 环境变量 FB_GRAPH_ACCESS_TOKEN / FACEBOOK_ACCESS_TOKEN
- *  2) R2 promo/_internal/fb-graph-access-token（由 publish-cache / 导出脚本写入）
- *  3) 请求 url= 参数里自带的 access_token（导出 JSON 含完整 Graph URL 时）
+ *  2) 请求 url= 参数里自带的 access_token（导出 JSON 含完整 Graph URL 时）
+ * 不再从公开 R2 的 _internal 前缀读取。
  *
  * GET /api/avatar?id=6157...&w=120
  * GET /api/avatar?url=https://graph.facebook.com/.../picture?...
@@ -14,9 +14,7 @@
 const DEFAULT_W = 120;
 const MAX_BYTES = 2 * 1024 * 1024;
 const CACHE_SEC = 7 * 24 * 3600;
-const FB_TOKEN_R2_KEY = "promo/_internal/fb-graph-access-token";
-
-// 进程内短缓存 token，减少 R2 读
+// 进程内短缓存 env token
 let cachedToken = { value: "", at: 0 };
 const TOKEN_TTL_MS = 5 * 60 * 1000;
 
@@ -158,32 +156,13 @@ export async function onRequestGet(context) {
 }
 
 async function resolveFbAccessToken(env) {
-  const fromEnv = String(env.FB_GRAPH_ACCESS_TOKEN || env.FACEBOOK_ACCESS_TOKEN || "").trim();
-  if (fromEnv) return fromEnv;
-
   const now = Date.now();
   if (cachedToken.value && now - cachedToken.at < TOKEN_TTL_MS) {
     return cachedToken.value;
   }
-
-  if (env.GALLERY_CACHE && typeof env.GALLERY_CACHE.get === "function") {
-    try {
-      const obj = await env.GALLERY_CACHE.get(FB_TOKEN_R2_KEY);
-      if (obj) {
-        const text = typeof obj === "string" ? obj : await obj.text();
-        const token = String(text || "").trim();
-        if (token.length >= 20) {
-          cachedToken = { value: token, at: now };
-          return token;
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  cachedToken = { value: "", at: now };
-  return "";
+  const fromEnv = String(env.FB_GRAPH_ACCESS_TOKEN || env.FACEBOOK_ACCESS_TOKEN || "").trim();
+  cachedToken = { value: fromEnv, at: now };
+  return fromEnv;
 }
 
 function buildGraphPictureUrl(authorId, width, token) {

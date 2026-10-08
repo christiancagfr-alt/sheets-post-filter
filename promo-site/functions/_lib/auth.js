@@ -9,16 +9,24 @@ export function getAccessPassword(env) {
 }
 
 export function getSigningSecret(env) {
-  return (
-    String(env.AUTH_SECRET || env.APPS_SCRIPT_API_SECRET || getAccessPassword(env) || "q-gallery").trim() ||
-    "q-gallery"
-  );
+  return String(
+    env.AUTH_SECRET || env.CACHE_PUBLISH_SECRET || env.APPS_SCRIPT_API_SECRET || getAccessPassword(env) || ""
+  ).trim();
+}
+
+export async function secretsEqual(left, right) {
+  const enc = new TextEncoder();
+  const a = await crypto.subtle.digest("SHA-256", enc.encode("cmp|" + String(left || "")));
+  const b = await crypto.subtle.digest("SHA-256", enc.encode("cmp|" + String(right || "")));
+  return crypto.subtle.timingSafeEqual(a, b);
 }
 
 export async function sign(value, env) {
+  const secret = getSigningSecret(env);
+  if (!secret) return "";
   const key = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(getSigningSecret(env)),
+    new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"]
@@ -47,7 +55,8 @@ export async function isAuthenticated(request, env) {
   if (!password) return true;
   const cookies = parseCookies(request.headers.get("cookie") || "");
   const expected = await sign(password, env);
-  return cookies[COOKIE_NAME] === expected;
+  if (!expected) return false;
+  return secretsEqual(cookies[COOKIE_NAME], expected);
 }
 
 export async function authCookieHeader(env, clear = false) {

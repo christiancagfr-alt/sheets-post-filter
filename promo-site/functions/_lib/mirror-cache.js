@@ -6,20 +6,42 @@ export const MANIFEST_KEY = "promo/manifest.json";
 export const CHUNK_PREFIX = "promo/chunks/";
 export const LAST_REFRESH_KEY = "promo/last-refresh.json";
 
+function isAllowedFetchHost(hostname) {
+  const host = String(hostname || "").toLowerCase();
+  if (
+    host === "drive.google.com" ||
+    host === "docs.google.com" ||
+    host === "drive.usercontent.google.com" ||
+    host === "lh3.googleusercontent.com"
+  ) {
+    return true;
+  }
+  return host === "zhixianglife.com" || host.endsWith(".zhixianglife.com");
+}
+
+export function isAllowedFetchUrl(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    return url.protocol === "https:" && isAllowedFetchHost(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function normalizeDriveUrl(url) {
   const text = String(url || "").trim();
   if (!text) return "";
   const idMatch = text.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || text.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-  if (idMatch) {
+  if (idMatch && /^[a-zA-Z0-9_-]{20,128}$/.test(idMatch[1])) {
     return (
       "https://drive.google.com/uc?export=download&confirm=t&id=" +
       encodeURIComponent(idMatch[1])
     );
   }
-  if (/drive\.google\.com/i.test(text) && !/[?&]confirm=/i.test(text)) {
+  if (/drive\.google\.com/i.test(text) && !/[?&]confirm=/i.test(text) && isAllowedFetchUrl(text)) {
     return text + (text.includes("?") ? "&" : "?") + "confirm=t";
   }
-  return text;
+  return isAllowedFetchUrl(text) ? text : "";
 }
 
 export function publicBase(env) {
@@ -61,8 +83,8 @@ export async function mirrorManifestToR2(env, manifestUrlInput) {
   }
 
   const manifestUrl = normalizeDriveUrl(manifestUrlInput || defaultManifestUrl(env));
-  if (!manifestUrl) {
-    const err = new Error("Missing manifestUrl / DRIVE_CACHE_MANIFEST_URL");
+  if (!manifestUrl || !isAllowedFetchUrl(manifestUrl)) {
+    const err = new Error("Missing or disallowed manifestUrl / DRIVE_CACHE_MANIFEST_URL");
     err.code = "NO_MANIFEST";
     throw err;
   }
@@ -71,6 +93,7 @@ export async function mirrorManifestToR2(env, manifestUrlInput) {
   const manifest = JSON.parse(manifestText);
   const chunks = Array.isArray(manifest.chunks) ? manifest.chunks : [];
   if (!chunks.length) throw new Error("Manifest has no chunks");
+  if (chunks.length > 2000) throw new Error("Manifest has too many chunks");
 
   const base = publicBase(env);
   const publishedChunks = [];
@@ -83,7 +106,7 @@ export async function mirrorManifestToR2(env, manifestUrlInput) {
       (chunk.fileId
         ? `https://drive.google.com/uc?export=download&confirm=t&id=${encodeURIComponent(chunk.fileId)}`
         : "");
-    if (!src) throw new Error(`Chunk ${i + 1} missing url/fileId`);
+    if (!src || !isAllowedFetchUrl(src)) throw new Error(`Chunk ${i + 1} missing or disallowed url/fileId`);
 
     const text = await fetchText(src);
     const data = JSON.parse(text);

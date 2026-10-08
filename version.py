@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 
-APP_VERSION = "1.5.15"
-GITHUB_REPO = "secure-artifacts/sheets-post-filter"
+APP_VERSION = "1.5.16"
+GITHUB_REPO = "christiancagfr-alt/sheets-post-filter"
 UPDATE_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 
