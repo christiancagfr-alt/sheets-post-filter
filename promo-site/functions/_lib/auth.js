@@ -1,0 +1,93 @@
+/**
+ * Shared auth helpers for Cloudflare Pages Functions.
+ */
+
+export const COOKIE_NAME = "q_gallery_auth";
+
+export function getAccessPassword(env) {
+  return String(env.ACCESS_PASSWORD || "").trim();
+}
+
+export function getSigningSecret(env) {
+  return String(
+    env.AUTH_SECRET || env.CACHE_PUBLISH_SECRET || env.APPS_SCRIPT_API_SECRET || getAccessPassword(env) || ""
+  ).trim();
+}
+
+export async function secretsEqual(left, right) {
+  const enc = new TextEncoder();
+  const a = await crypto.subtle.digest("SHA-256", enc.encode("cmp|" + String(left || "")));
+  const b = await crypto.subtle.digest("SHA-256", enc.encode("cmp|" + String(right || "")));
+  return crypto.subtle.timingSafeEqual(a, b);
+}
+
+export async function sign(value, env) {
+  const secret = getSigningSecret(env);
+  if (!secret) return "";
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(String(value || "")));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export function parseCookies(header = "") {
+  return Object.fromEntries(
+    String(header || "")
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const index = part.indexOf("=");
+        return index === -1
+          ? [part, ""]
+          : [part.slice(0, index), decodeURIComponent(part.slice(index + 1))];
+      })
+  );
+}
+
+export async function isAuthenticated(request, env) {
+  const password = getAccessPassword(env);
+  if (!password) return true;
+  const cookies = parseCookies(request.headers.get("cookie") || "");
+  const [expires, mac] = String(cookies[COOKIE_NAME] || "").split(".");
+  if (!/^\d+$/.test(expires) || Number(expires) < Date.now()) return false;
+  const expected = await sign(`session|${expires}|${password}`, env);
+  if (!expected) return false;
+  return secretsEqual(mac, expected);
+}
+
+export async function authCookieHeader(env, clear = false) {
+  if (clear) {
+    return `${COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+  }
+  const password = getAccessPassword(env);
+  const expires = String(Date.now() + 2592000000);
+  const token = expires + "." + await sign(`session|${expires}|${password}`, env);
+  return `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`;
+}
+
+export function json(data, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      ...extraHeaders,
+    },
+  });
+}
+
+export async function readJsonBody(request) {
+  try {
+    const text = await request.text();
+    if (!text) return {};
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
+}

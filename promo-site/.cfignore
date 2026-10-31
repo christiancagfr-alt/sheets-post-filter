@@ -1,0 +1,11 @@
+.vercel
+.env*
+.git
+node_modules
+google-apps-script
+*.zip
+README-DEPLOY.md
+
+.cache-publish-secret.txt
+
+_test_publish_body.json

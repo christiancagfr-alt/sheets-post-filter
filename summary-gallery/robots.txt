@@ -1,0 +1,5 @@
+# Keep pages crawlable so search engines can read their noindex directives.
+User-agent: *
+Disallow: /api/
+Disallow: /cdn/
+Disallow: /summary/

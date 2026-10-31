@@ -1,0 +1,7 @@
+.vercel
+.env*.local
+.wrangler
+
+.cache-publish-secret.txt
+
+_test_publish_body.json
