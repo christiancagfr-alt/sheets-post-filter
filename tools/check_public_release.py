@@ -27,7 +27,7 @@ def example(value):
 
 def inspect(path, relative):
     errors=[]
-    if (path.name.startswith(".env") and path.name!=".env.example") or path.suffix.lower() in {".pem", ".key", ".pfx", ".p12"}:
+    if (path.name.startswith(".env") and path.name!=".env.example") or path.suffix.lower() in {".pem", ".key", ".pfx", ".p12", ".dsconfig"}:
         return [(relative,0,"private environment or certificate")]
     if path.name in PRIVATE_NAMES or path.name.startswith("credentials") and path.suffix==".json":
         return [(relative,0,"private runtime file")]

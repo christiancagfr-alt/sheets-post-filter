@@ -670,6 +670,8 @@ def deploy_gallery(
     log: LogFn | None = None,
     site_kind: str = "promo",
     profile_id: str = "",
+    force_update: bool = False,
+    create_if_missing: bool = False,
 ) -> dict[str, Any]:
     """Login must already have stored a token, or pass token=."""
     log = log or (lambda m: None)
@@ -689,6 +691,22 @@ def deploy_gallery(
         raise CloudflareError("该域名已属于另一个账号的站点，不会覆盖。请选择正确账号。")
     if previous and previous.get('kind', 'promo') != site_kind:
         raise CloudflareError("该域名已用于另一种图库，不能覆盖。请为新的汇总图库使用独立域名。")
+    from gallery_management import find_project, validate_project, connect_existing
+    remote = find_project(api, account_id, host, project_hint=(previous or {}).get('project', ''))
+    if remote:
+        if not previous:
+            raise CloudflareError('此域名已经部署过。请导入原电脑配置，或使用“连接已有站点”填写原发布密钥；不会新建项目或更换密钥。')
+        validate_project(remote, previous)
+        if not force_update:
+            if site_kind == 'summary':
+                return connect_existing(api, account_id, host, previous.get('secret', ''), kind=site_kind,
+                                        profile_id=profile_id, project_hint=previous['project'], log=log)
+            log('已复用原贴文图库；发布数据直接点击“发布图库”。没有重新部署。')
+            return {**previous, 'ok': True, 'reused': True, 'deployed': False}
+    elif previous:
+        raise CloudflareError('原项目不存在或当前令牌不可访问；不会自动重建，请核对账号。')
+    elif not create_if_missing:
+        raise CloudflareError('未找到已有站点。确实要创建新站点时，请使用“创建新站点”。')
     log("正在检查令牌的 Pages / R2 权限 …")
     api.verify_deploy_permissions(account_id)
     resources = resolve_gallery_resources(host, state)
@@ -717,11 +735,23 @@ def deploy_gallery(
         log("站点访问密码：已设置（打开网页需要输入）")
     else:
         log("站点访问密码：未设置（打开网页直接进入）")
-    _ensure_bucket(api, account_id, bucket, log)
-    _ensure_project(api, account_id, project, log)
-    _configure_project(
-        api, account_id, project, bucket, secret, public_base, log, access_password=access_password
-    )
+    if not previous:
+        # Refuse to overwrite an unrelated project with a colliding generated name.
+        try:
+            api.get(f'/accounts/{account_id}/pages/projects/{project}')
+        except CloudflareError as exc:
+            if not is_missing_resource(exc):
+                raise
+        else:
+            raise CloudflareError('生成的项目名已存在，未覆盖；请连接原站点或使用不同域名。')
+        _ensure_bucket(api, account_id, bucket, log)
+        _ensure_project(api, account_id, project, log)
+        _configure_project(
+            api, account_id, project, bucket, secret, public_base, log, access_password=access_password
+        )
+    else:
+        access_password = str(previous.get('access_password') or '')
+        log('仅更新原项目网页，沿用线上环境变量与发布密钥；修改密码请使用独立按钮。')
     files = collect_static_files(site_dir, host)
     if not files:
         raise CloudflareError("站点目录里没有可上传的静态文件")

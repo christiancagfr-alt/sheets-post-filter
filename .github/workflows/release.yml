@@ -67,6 +67,9 @@ jobs:
           Copy-Item config.example.json (Join-Path $stage "config.example.json") -Force
           Copy-Item 使用说明.txt (Join-Path $stage "使用说明.txt") -Force
           Copy-Item logo.ico (Join-Path $stage "logo.ico") -Force
+          Copy-Item web/static/logo.png (Join-Path $stage "logo.png") -Force
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage "web\static") | Out-Null
+          Copy-Item web/static/logo.png (Join-Path $stage "web\static\logo.png") -Force
           Copy-Item uninstall-template.bat (Join-Path $stage "uninstall.bat") -Force
           $asset = "data-summary-tool-windows-v$env:VERSION.zip"
           $assetPath = Join-Path $PWD "release\$asset"
@@ -168,7 +171,7 @@ jobs:
           SRC="web/static/logo.png"
           ICONSET="build/app.iconset"
           mkdir -p "$ICONSET"
-          for size in 16 32 64 128 256 512; do
+          for size in 16 32 128 256 512; do
             sips -z "$size" "$size" "$SRC" --out "$ICONSET/icon_${size}x${size}.png"
             sips -z "$((size * 2))" "$((size * 2))" "$SRC" --out "$ICONSET/icon_${size}x${size}@2x.png"
           done

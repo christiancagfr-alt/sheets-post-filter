@@ -113,11 +113,26 @@ C = {
 }
 _UI_FONT = "PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei UI"
 _MONO_FONT = "Menlo" if sys.platform == "darwin" else "Cascadia Mono"
-F = (_UI_FONT, 10)
-FS = (_UI_FONT, 9)
-FB = (_UI_FONT, 11, "bold")
-FH = (_UI_FONT, 16, "bold")
-MONO = (_MONO_FONT, 9)
+F = (_UI_FONT, 12 if sys.platform == "darwin" else 10)
+FS = (_UI_FONT, 11 if sys.platform == "darwin" else 9)
+FB = (_UI_FONT, 13 if sys.platform == "darwin" else 11, "bold")
+FH = (_UI_FONT, 18 if sys.platform == "darwin" else 16, "bold")
+MONO = (_MONO_FONT, 11 if sys.platform == "darwin" else 9)
+
+
+def _scroll_step(delta: int) -> int:
+    if not delta:
+        return 0
+    return (-1 if delta > 0 else 1) * max(1, abs(int(delta)) // 120)
+
+
+def _open_folder(path: Path) -> None:
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    elif hasattr(os, "startfile"):
+        os.startfile(str(path))
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
 
 
 def _mutex_socket() -> socket.socket | None:
@@ -263,37 +278,167 @@ def _kill_stale_mutex() -> bool:
     return killed
 
 
-class StyleBtn(tk.Button):
+class StyleBtn(tk.Label):
+    """Cross-platform button widget that preserves bg/fg colors on macOS Aqua."""
+
     def __init__(self, master, kind="ghost", **kw):
+        self._command = kw.pop("command", None)
+        self._state = str(kw.pop("state", "normal") or "normal")
         if kind == "primary":
-            defaults = dict(bg=C["accent"], fg="white", activebackground="#1d4ed8", activeforeground="white", bd=0)
+            defaults = dict(
+                bg=C["accent"],
+                fg="#ffffff",
+                activebackground="#1d4ed8",
+                activeforeground="#ffffff",
+                bd=0,
+                relief="flat",
+                highlightthickness=1,
+                highlightbackground="#1d4ed8",
+            )
         elif kind == "head":
-            defaults = dict(bg=C["head"], fg=C["cream"], activebackground="#274b79", activeforeground=C["cream"], bd=0)
+            defaults = dict(
+                bg="#274b79",
+                fg=C["cream"],
+                activebackground="#3b82f6",
+                activeforeground="#ffffff",
+                bd=0,
+                relief="flat",
+                highlightthickness=1,
+                highlightbackground="#476b9e",
+            )
         else:
             defaults = dict(
                 bg=C["card"],
                 fg=C["ink"],
                 activebackground="#e2e8f0",
                 activeforeground=C["ink"],
-                bd=1,
-                relief="solid",
-                highlightthickness=0,
+                bd=0,
+                relief="flat",
+                highlightthickness=1,
+                highlightbackground="#cbd5e1",
             )
         defaults.update(
             font=F,
-            padx=10,
+            padx=12,
             pady=6,
             cursor="hand2",
-            highlightbackground=C["line"],
         )
         defaults.update(kw)
+        self._normal_bg = defaults.get("bg") or defaults.get("background") or C["card"]
+        self._normal_fg = defaults.get("fg") or defaults.get("foreground") or C["ink"]
+        self._active_bg = defaults.pop("activebackground", self._normal_bg)
+        self._active_fg = defaults.pop("activeforeground", self._normal_fg)
+        self._normal_cursor = defaults.get("cursor", "hand2")
         super().__init__(master, **defaults)
+        self.bind("<Enter>", self._on_enter, add="+")
+        self.bind("<Leave>", self._on_leave, add="+")
+        self.bind("<ButtonRelease-1>", self._on_click, add="+")
+        if self._state == "disabled":
+            self._apply_state()
+
+    def _apply_state(self) -> None:
+        try:
+            if self._state == "disabled":
+                super().configure(bg="#cbd5e1", fg="#64748b", cursor="")
+            else:
+                super().configure(bg=self._normal_bg, fg=self._normal_fg, cursor=self._normal_cursor)
+        except tk.TclError:
+            pass
+
+    def configure(self, cnf=None, **kw):
+        if isinstance(cnf, dict):
+            kw = {**cnf, **kw}
+        elif cnf is not None:
+            return super().configure(cnf)
+        if not kw:
+            return super().configure()
+        if "command" in kw:
+            self._command = kw.pop("command")
+        if "bg" in kw or "background" in kw:
+            self._normal_bg = kw.get("bg") or kw.get("background")
+        if "fg" in kw or "foreground" in kw:
+            self._normal_fg = kw.get("fg") or kw.get("foreground")
+        if "activebackground" in kw:
+            self._active_bg = kw.pop("activebackground")
+        if "activeforeground" in kw:
+            self._active_fg = kw.pop("activeforeground")
+        if "cursor" in kw:
+            self._normal_cursor = kw["cursor"]
+        state_changed = False
+        if "state" in kw:
+            self._state = str(kw.pop("state") or "normal")
+            state_changed = True
+        result = super().configure(**kw) if kw else None
+        if state_changed or self._state == "disabled":
+            self._apply_state()
+        return result
+
+    config = configure
+
+    def cget(self, key: str):
+        if key == "state":
+            return self._state
+        if key == "command":
+            return self._command
+        if key == "activebackground":
+            return self._active_bg
+        if key == "activeforeground":
+            return self._active_fg
+        return super().cget(key)
+
+    def __getitem__(self, key: str):
+        return self.cget(key)
+
+    def __setitem__(self, key: str, value) -> None:
+        self.configure(**{key: value})
+
+    def invoke(self):
+        if self._state != "disabled" and callable(self._command):
+            return self._command()
+        return None
+
+    def _on_enter(self, _event=None) -> None:
+        if self._state != "disabled":
+            try:
+                super().configure(bg=self._active_bg, fg=self._active_fg)
+            except tk.TclError:
+                pass
+
+    def _on_leave(self, _event=None) -> None:
+        if self._state != "disabled":
+            try:
+                super().configure(bg=self._normal_bg, fg=self._normal_fg)
+            except tk.TclError:
+                pass
+
+    def _on_click(self, event=None) -> None:
+        if self._state == "disabled":
+            return
+        if event is not None:
+            try:
+                w, h = self.winfo_width(), self.winfo_height()
+                if not (0 <= event.x < w and 0 <= event.y < h):
+                    return
+            except tk.TclError:
+                return
+        self.invoke()
 
 
 class DesktopApp(tk.Tk):
     def __init__(self) -> None:
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("com.secure-artifacts.sheets-post-filter")
+            except Exception:
+                pass
+        for _mod_dir in (str(Path(__file__).resolve().parent), str(RESOURCE_DIR)):
+            if _mod_dir and _mod_dir not in sys.path:
+                sys.path.insert(0, _mod_dir)
         super().__init__()
         os.chdir(SCRIPT_DIR)
+        self._logo_full: tk.PhotoImage | None = None
+        self._logo: tk.PhotoImage | None = None
         self.cfg = load_config()
         self._log_n = 0
         self._src_rows: list[tk.Frame] = []
@@ -311,7 +456,7 @@ class DesktopApp(tk.Tk):
         self._tick_id = None
         self._vd_ui_mode = ""
         self._menus: list[dict] = []
-        self._menu_buttons: dict[str, tk.Button] = {}
+        self._menu_buttons: dict[str, StyleBtn] = {}
         self._active_menu_id = ""
         self._selecting_menu = False
         self._scroll_pages: list[tk.Frame] = []
@@ -336,17 +481,84 @@ class DesktopApp(tk.Tk):
         self.configure(bg=C["paper"])
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("TCombobox", padding=4, font=F, fieldbackground=C["card"], foreground=C["ink"])
+        style.configure("TFrame", background=C["paper"])
+        style.configure("TLabel", background=C["paper"], foreground=C["ink"], font=F)
+        style.configure(
+            "TButton",
+            background=C["card"],
+            foreground=C["ink"],
+            bordercolor="#cbd5e1",
+            lightcolor=C["card"],
+            darkcolor=C["card"],
+            padding=(10, 5),
+            font=F,
+        )
+        style.map(
+            "TButton",
+            background=[("disabled", "#e2e8f0"), ("pressed", "#cbd5e1"), ("active", "#e2e8f0")],
+            foreground=[("disabled", "#94a3b8"), ("pressed", C["ink"]), ("active", C["ink"])],
+        )
+        style.configure(
+            "TCheckbutton",
+            background=C["paper"],
+            foreground=C["ink"],
+            indicatorbackground=C["card"],
+            indicatorforeground=C["accent"],
+            font=F,
+        )
+        style.map(
+            "TCheckbutton",
+            background=[("active", C["paper"])],
+            foreground=[("active", C["ink"]), ("disabled", "#94a3b8")],
+            indicatorbackground=[("selected", C["accent"]), ("!selected", C["card"])],
+            indicatorforeground=[("selected", "#ffffff")],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground="#f8fafc",
+            foreground=C["ink"],
+            insertcolor=C["ink"],
+            bordercolor="#cbd5e1",
+            lightcolor="#cbd5e1",
+            darkcolor="#cbd5e1",
+            padding=5,
+            font=F,
+        )
+        style.map(
+            "TEntry",
+            fieldbackground=[("readonly", "#f1f5f9"), ("focus", "#ffffff")],
+            foreground=[("disabled", "#94a3b8"), ("!disabled", C["ink"])],
+            bordercolor=[("focus", C["accent"])],
+        )
+        style.configure(
+            "TCombobox",
+            padding=4,
+            font=F,
+            fieldbackground="#f8fafc",
+            background="#e2e8f0",
+            foreground=C["ink"],
+            arrowcolor=C["ink"],
+            bordercolor="#cbd5e1",
+            lightcolor="#cbd5e1",
+            darkcolor="#cbd5e1",
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", "#f8fafc"), ("readonly", "focus", "#ffffff")],
+            foreground=[("readonly", C["ink"]), ("readonly", "focus", C["ink"])],
+            selectbackground=[("readonly", "#f8fafc"), ("readonly", "focus", "#ffffff")],
+            selectforeground=[("readonly", C["ink"]), ("readonly", "focus", C["ink"])],
+            background=[("active", "#cbd5e1"), ("pressed", "#cbd5e1")],
+        )
         style.configure("Vertical.TScrollbar", background="#cbd5e1", troughcolor=C["paper"], borderwidth=0, arrowsize=12)
+        self.option_add("*TCombobox*Listbox.background", C["card"])
+        self.option_add("*TCombobox*Listbox.foreground", C["ink"])
+        self.option_add("*TCombobox*Listbox.selectBackground", C["accent"])
+        self.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+        self.option_add("*TCombobox*Listbox.font", F)
         self.bind_all("<MouseWheel>", self._wheel_page, add="+")
         self.bind("<Control-s>", lambda _event: self._save())
-        for ico in (RESOURCE_DIR / "logo.ico", SCRIPT_DIR / "logo.ico"):
-            if ico.exists():
-                try:
-                    self.iconbitmap(str(ico))
-                    break
-                except Exception:
-                    pass
+        self._apply_window_icon()
         self._build()
         self._init_menus()
         self._load_global_credentials()
@@ -375,7 +587,7 @@ class DesktopApp(tk.Tk):
         tk.Label(head, text=title, bg=C["card"], fg=C["ink"], font=FB).pack(side="left")
         if em:
             tk.Label(head, text=em, bg=C["card"], fg=C["accent"], font=FS).pack(side="left", padx=8)
-        tk.Label(head, text="点击展开/收起", bg=C["card"], fg="#94a3b8", font=(_UI_FONT, 8)).pack(side="right")
+        tk.Label(head, text="点击展开/收起", bg=C["card"], fg="#94a3b8", font=(_UI_FONT, 10 if sys.platform == "darwin" else 8)).pack(side="right")
         inner = tk.Frame(box, bg=C["card"])
         if not collapsed:
             inner.pack(fill="x", padx=16, pady=(0, 14))
@@ -395,12 +607,62 @@ class DesktopApp(tk.Tk):
     def _note(self, parent, text):
         tk.Label(parent, text=text, bg=C["card"], fg=C["muted"], font=FS, wraplength=820, justify="left").pack(anchor="w", pady=(0, 8))
 
+    def _input(self, parent, font=MONO, **kw) -> tk.Entry:
+        opts = dict(
+            font=font,
+            relief="flat",
+            bd=1,
+            bg="#f8fafc",
+            fg=C["ink"],
+            insertbackground=C["ink"],
+            selectbackground="#bfdbfe",
+            selectforeground=C["ink"],
+            highlightthickness=1,
+            highlightbackground="#cbd5e1",
+            highlightcolor=C["accent"],
+        )
+        opts.update(kw)
+        return tk.Entry(parent, **opts)
+
+    def _text_input(self, parent, **kw) -> tk.Text:
+        opts = dict(
+            font=F,
+            relief="flat",
+            bd=1,
+            bg="#f8fafc",
+            fg=C["ink"],
+            insertbackground=C["ink"],
+            selectbackground="#bfdbfe",
+            selectforeground=C["ink"],
+            highlightthickness=1,
+            highlightbackground="#cbd5e1",
+            highlightcolor=C["accent"],
+        )
+        opts.update(kw)
+        return tk.Text(parent, **opts)
+
+    def _radio(self, parent, text, variable, value, command=None, font=FS) -> tk.Radiobutton:
+        return tk.Radiobutton(
+            parent,
+            text=text,
+            variable=variable,
+            value=value,
+            command=command,
+            bg=C["card"],
+            fg=C["ink"],
+            activebackground=C["card"],
+            activeforeground=C["ink"],
+            selectcolor="#ffffff",
+            highlightthickness=0,
+            bd=0,
+            font=font,
+        )
+
     def _entry(self, parent, label, var, show=None, width=None):
         wrap = tk.Frame(parent, bg=C["card"])
         wrap.pack(fill="x", pady=4)
         tk.Label(wrap, text=label, bg=C["card"], fg=C["muted"], font=FS).pack(anchor="w")
-        e = tk.Entry(wrap, textvariable=var, font=F, show=show or "", relief="flat", bd=1,
-                     bg="#f8fafc", fg=C["ink"], highlightthickness=1, highlightbackground=C["line"], highlightcolor=C["accent"])
+        e = self._input(wrap, font=F, textvariable=var, show=show or "")
         e.pack(fill="x", ipady=5, pady=(3, 0))
         return e
 
@@ -413,7 +675,10 @@ class DesktopApp(tk.Tk):
             fg=C["ink"],
             font=F,
             activebackground=C["card"],
-            selectcolor="#fff",
+            activeforeground=C["ink"],
+            selectcolor="#ffffff",
+            highlightthickness=0,
+            bd=0,
             anchor="w",
         )
         cb.pack(anchor="w", pady=2)
@@ -429,7 +694,7 @@ class DesktopApp(tk.Tk):
         box = tk.Frame(grid, bg=C["card"])
         box.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 8, 0))
         tk.Label(box, text=label, bg=C["card"], fg=C["muted"], font=FS).pack(anchor="w")
-        tk.Entry(box, textvariable=var, font=MONO, relief="solid", bd=1).pack(fill="x", ipady=5, pady=(3, 0))
+        self._input(box, font=MONO, textvariable=var).pack(fill="x", ipady=5, pady=(3, 0))
         return box
 
     def _scroll_tab(self, parent):
@@ -456,7 +721,9 @@ class DesktopApp(tk.Tk):
         canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win, width=e.width))
 
         def wheel(e):
-            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+            step = _scroll_step(e.delta)
+            if step:
+                canvas.yview_scroll(step, "units")
             return "break"
 
         canvas.bind("<MouseWheel>", wheel)
@@ -497,6 +764,80 @@ class DesktopApp(tk.Tk):
             except Exception:
                 pass
 
+    def _candidate_asset_dirs(self) -> list[Path]:
+        exe_dir = Path(sys.executable).resolve().parent
+        dirs = [
+            RESOURCE_DIR,
+            SCRIPT_DIR,
+            Path(__file__).resolve().parent,
+            exe_dir,
+            exe_dir / "_internal",
+            exe_dir.parent / "Resources",
+            exe_dir.parent / "Frameworks",
+        ]
+        out: list[Path] = []
+        for d in dirs:
+            try:
+                rp = d.resolve()
+                if rp not in out:
+                    out.append(rp)
+            except Exception:
+                if d not in out:
+                    out.append(d)
+        return out
+
+    def _apply_window_icon(self) -> None:
+        import base64
+        import tempfile
+
+        asset_dirs = self._candidate_asset_dirs()
+        if self._logo is None:
+            for base in asset_dirs:
+                for rel in (Path("web") / "static" / "logo.png", Path("logo.png")):
+                    p = base / rel
+                    if p.is_file():
+                        try:
+                            b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+                            self._logo_full = tk.PhotoImage(data=b64)
+                            self._logo = self._logo_full.subsample(18, 18)
+                            break
+                        except Exception:
+                            try:
+                                self._logo_full = tk.PhotoImage(file=str(p))
+                                self._logo = self._logo_full.subsample(18, 18)
+                                break
+                            except Exception:
+                                pass
+                if self._logo is not None:
+                    break
+        if self._logo_full is not None and self._logo is not None:
+            try:
+                self.iconphoto(True, self._logo_full, self._logo)
+            except Exception:
+                pass
+        for base in asset_dirs:
+            ico = base / "logo.ico"
+            if ico.is_file():
+                if sys.platform == "win32":
+                    applied = False
+                    for target in (str(ico),):
+                        try:
+                            self.iconbitmap(default=target)
+                            self.iconbitmap(target)
+                            applied = True
+                        except Exception:
+                            pass
+                    if not applied or not str(ico).isascii():
+                        try:
+                            tmp_ico = Path(tempfile.gettempdir()) / "sheets_post_filter_logo.ico"
+                            if not tmp_ico.exists() or tmp_ico.stat().st_size != ico.stat().st_size:
+                                tmp_ico.write_bytes(ico.read_bytes())
+                            self.iconbitmap(default=str(tmp_ico))
+                            self.iconbitmap(str(tmp_ico))
+                        except Exception:
+                            pass
+                break
+
     # ----- build -----
     def _build(self) -> None:
         self._build_header()
@@ -508,13 +849,10 @@ class DesktopApp(tk.Tk):
         head.pack(fill="x")
         left = tk.Frame(head, bg=C["head"])
         left.pack(side="left", padx=18, pady=8)
-        logo_path = RESOURCE_DIR / "web" / "static" / "logo.png"
-        if logo_path.exists():
-            try:
-                self._logo = tk.PhotoImage(file=str(logo_path)).subsample(18, 18)
-                tk.Label(left, image=self._logo, bg=C["head"]).pack(side="left", padx=(0, 12))
-            except Exception:
-                pass
+        if self._logo is None:
+            self._apply_window_icon()
+        if self._logo is not None:
+            tk.Label(left, image=self._logo, bg=C["head"], bd=0, highlightthickness=0).pack(side="left", padx=(0, 12))
         brand = tk.Frame(left, bg=C["head"])
         brand.pack(side="left")
         tk.Label(brand, text="数据汇总工具", fg=C["cream"], bg=C["head"], font=FH).pack(anchor="w")
@@ -530,32 +868,51 @@ class DesktopApp(tk.Tk):
         tk.Label(
             version_row,
             text=f"版本 {APP_VERSION}",
-            fg="#a8bedb",
+            fg="#cbd5e1",
             bg=C["head"],
-            font=(_UI_FONT, 8),
+            font=(_UI_FONT, 10 if sys.platform == "darwin" else 8),
         ).pack(side="left")
         self.btn_update = StyleBtn(
             version_row,
-            "ghost",
+            "head",
             text="检查更新",
             command=self._check_updates,
-            bg=C["head"],
-            fg=C["cream"],
-            padx=8,
-            pady=2,
+            bg="#274b79",
+            fg="#ffffff",
+            activebackground="#3b82f6",
+            activeforeground="#ffffff",
+            highlightbackground="#5278a8",
+            padx=10,
+            pady=3,
         )
         self.btn_update.pack(side="left", padx=8)
         self.btn_settings = StyleBtn(
             version_row,
-            "ghost",
+            "head",
             text="设置",
             command=self._open_settings,
-            bg=C["head"],
-            fg=C["cream"],
-            padx=8,
-            pady=2,
+            bg="#274b79",
+            fg="#ffffff",
+            activebackground="#3b82f6",
+            activeforeground="#ffffff",
+            highlightbackground="#5278a8",
+            padx=10,
+            pady=3,
         )
         self.btn_settings.pack(side="left")
+        StyleBtn(
+            version_row,
+            "head",
+            text="配置导入 / 导出",
+            command=self._open_config_transfer,
+            bg="#274b79",
+            fg="#ffffff",
+            activebackground="#3b82f6",
+            activeforeground="#ffffff",
+            highlightbackground="#5278a8",
+            padx=10,
+            pady=3,
+        ).pack(side="left", padx=8)
 
         self.status = tk.StringVar(value="待命")
         tk.Label(
@@ -570,24 +927,32 @@ class DesktopApp(tk.Tk):
 
         body = tk.Frame(self, bg=C["paper"])
         body.pack(fill="both", expand=True, pady=(6, 0))
-        self.sidebar = tk.Frame(body, bg=C["sa"], width=206)
+        self.sidebar = tk.Frame(body, bg=C["sa"], width=220 if sys.platform == "darwin" else 206)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
         side_head = tk.Frame(self.sidebar, bg=C["sa"])
         side_head.pack(fill="x", padx=12, pady=(14, 8))
         tk.Label(side_head, text="配置菜单", bg=C["sa"], fg=C["cream"], font=FB).pack(side="left")
-        StyleBtn(side_head, "head", text="＋", command=self._add_menu, padx=9, pady=3).pack(side="right")
+        StyleBtn(
+            side_head,
+            "primary",
+            text="＋",
+            command=self._add_menu,
+            highlightbackground="#60a5fa",
+            padx=10,
+            pady=3,
+        ).pack(side="right")
         side_actions = tk.Frame(self.sidebar, bg=C["sa"])
         side_actions.pack(side="bottom", fill="x", padx=8, pady=(6, 12))
         StyleBtn(
-            side_actions, "ghost", text="修改名称", command=self._rename_menu,
-            bg="#1e3a5f", fg=C["cream"], activebackground="#3b82f6", activeforeground=C["cream"],
-            padx=8, pady=5,
+            side_actions, "head", text="修改名称", command=self._rename_menu,
+            bg="#243b5a", fg="#ffffff", activebackground="#3b82f6", activeforeground="#ffffff",
+            highlightbackground="#3b5984", padx=10, pady=5,
         ).pack(side="left")
         StyleBtn(
-            side_actions, "ghost", text="删除", command=self._delete_menu,
-            bg="#1e3a5f", fg=C["cream"], activebackground="#e11d48", activeforeground="white",
-            padx=8, pady=5,
+            side_actions, "head", text="删除", command=self._delete_menu,
+            bg="#243b5a", fg="#fecdd3", activebackground="#e11d48", activeforeground="#ffffff",
+            highlightbackground="#3b5984", padx=10, pady=5,
         ).pack(side="right")
         menu_wrap = tk.Frame(self.sidebar, bg=C["sa"])
         menu_wrap.pack(fill="both", expand=True, padx=8)
@@ -600,7 +965,9 @@ class DesktopApp(tk.Tk):
         self._menu_canvas.bind("<Configure>", lambda e: self._menu_canvas.itemconfigure(self._menu_canvas_win, width=e.width))
 
         def _menu_wheel(event):
-            self._menu_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            step = _scroll_step(event.delta)
+            if step:
+                self._menu_canvas.yview_scroll(step, "units")
             return "break"
 
         self._menu_canvas.bind("<MouseWheel>", _menu_wheel)
@@ -723,31 +1090,38 @@ class DesktopApp(tk.Tk):
                 activebackground=C["sa"],
                 selectcolor=C["head"],
                 fg=C["cream"],
+                activeforeground=C["cream"],
                 relief="flat",
+                bd=0,
                 highlightthickness=0,
-            ).pack(side="left", padx=(2, 0))
+            ).pack(side="left", padx=(2, 4))
             labels = TEMPLATE_NAMES
             text = f"{item['name']}\n  {labels.get(item['template'], '')}"
-            btn = tk.Button(
+            is_active = item["id"] == self._active_menu_id
+            btn = StyleBtn(
                 wrap,
+                "head",
                 text=text,
                 command=lambda menu_id=item["id"]: self._select_menu(menu_id),
                 anchor="w",
                 justify="left",
-                bg="#1e3a5f" if item["id"] == self._active_menu_id else C["sa"],
-                fg=C["cream"],
-                activebackground="#1d4ed8",
-                activeforeground=C["cream"],
-                relief="flat",
-                bd=0,
-                padx=8,
+                bg=C["accent"] if is_active else "#1e3250",
+                fg="#ffffff" if is_active else C["cream"],
+                activebackground="#1d4ed8" if is_active else "#274b79",
+                activeforeground="#ffffff",
+                highlightthickness=1,
+                highlightbackground="#60a5fa" if is_active else "#294366",
+                padx=10,
                 pady=8,
                 font=F,
-                cursor="hand2",
             )
             btn.pack(side="left", fill="x", expand=True)
-            btn.bind("<Double-Button-1>", lambda _event, menu_id=item["id"]: self._rename_menu(menu_id))
-            btn.bind("<MouseWheel>", lambda e: self._menu_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units") or "break")
+            btn.bind("<Double-Button-1>", lambda _event, menu_id=item["id"]: self._rename_menu(menu_id), add="+")
+            btn.bind(
+                "<MouseWheel>",
+                lambda e: (self._menu_canvas.yview_scroll(_scroll_step(e.delta), "units") if _scroll_step(e.delta) else None) or "break",
+                add="+",
+            )
             self._menu_buttons[item["id"]] = btn
 
     def _store_current_menu_settings(self) -> None:
@@ -823,7 +1197,13 @@ class DesktopApp(tk.Tk):
     def _highlight_menu_buttons(self) -> None:
         for menu_id, btn in self._menu_buttons.items():
             try:
-                btn.configure(bg=C["accent"] if menu_id == self._active_menu_id else C["sa"])
+                active = menu_id == self._active_menu_id
+                btn.configure(
+                    bg=C["accent"] if active else "#1e3250",
+                    fg="#ffffff" if active else C["cream"],
+                    activebackground="#1d4ed8" if active else "#274b79",
+                    highlightbackground="#60a5fa" if active else "#294366",
+                )
             except Exception:
                 pass
 
@@ -857,8 +1237,9 @@ class DesktopApp(tk.Tk):
             win.destroy()
 
         for key, title, desc in options:
-            btn = tk.Button(
+            btn = StyleBtn(
                 win,
+                "ghost",
                 text=f"{title}\n{desc}",
                 command=lambda k=key: pick(k),
                 anchor="w",
@@ -866,12 +1247,10 @@ class DesktopApp(tk.Tk):
                 bg=C["card"],
                 fg=C["ink"],
                 activebackground="#dbeafe",
-                relief="solid",
-                bd=1,
+                activeforeground=C["ink"],
                 padx=14,
                 pady=10,
                 font=F,
-                cursor="hand2",
             )
             btn.pack(fill="x", padx=18, pady=4)
         StyleBtn(win, "ghost", text="取消", command=win.destroy).pack(anchor="e", padx=18, pady=(8, 16))
@@ -926,11 +1305,10 @@ class DesktopApp(tk.Tk):
     def _add_src_row(self, box, rows_attr, name_ph, count, name="", url=""):
         row = tk.Frame(box, bg=C["card"])
         row.pack(fill="x", pady=3)
-        n = tk.Entry(row, font=MONO, relief="solid", bd=1)
+        n = self._input(row, font=MONO, width=16)
         n.insert(0, name)
         n.pack(side="left", ipady=4)
-        n.configure(width=16)
-        u = tk.Entry(row, font=MONO, relief="solid", bd=1)
+        u = self._input(row, font=MONO)
         u.insert(0, url)
         u.pack(side="left", fill="x", expand=True, padx=6, ipady=4)
         StyleBtn(row, "ghost", text="删除", command=lambda: self._del_src_row(row, box, rows_attr, name_ph, count)).pack(side="left")
@@ -1013,7 +1391,7 @@ class DesktopApp(tk.Tk):
     def _add_vd_type(self, value: str = "", in_total: bool = True, in_item: bool = True, duration_split: bool = False) -> None:
         row = tk.Frame(self.vd_type_box, bg=C["card"])
         row.pack(fill="x", pady=3)
-        e = tk.Entry(row, font=MONO, relief="solid", bd=1)
+        e = self._input(row, font=MONO)
         e.insert(0, value)
         e.pack(side="left", fill="x", expand=True, ipady=4)
         checks = tk.Frame(row, bg=C["card"])
@@ -1021,9 +1399,20 @@ class DesktopApp(tk.Tk):
         var_total = tk.BooleanVar(value=bool(in_total))
         var_item = tk.BooleanVar(value=bool(in_item))
         var_split = tk.BooleanVar(value=bool(duration_split))
-        tk.Checkbutton(checks, text="总计数", variable=var_total, bg=C["card"], fg=C["ink"], activebackground=C["card"], selectcolor="#fff", font=FS).pack(side="left")
-        tk.Checkbutton(checks, text="逐条计数", variable=var_item, bg=C["card"], fg=C["ink"], activebackground=C["card"], selectcolor="#fff", font=FS).pack(side="left")
-        tk.Checkbutton(checks, text="按时长分类", variable=var_split, bg=C["card"], fg=C["ink"], activebackground=C["card"], selectcolor="#fff", font=FS).pack(side="left")
+        for label, var in (("总计数", var_total), ("逐条计数", var_item), ("按时长分类", var_split)):
+            tk.Checkbutton(
+                checks,
+                text=label,
+                variable=var,
+                bg=C["card"],
+                fg=C["ink"],
+                activebackground=C["card"],
+                activeforeground=C["ink"],
+                selectcolor="#ffffff",
+                highlightthickness=0,
+                bd=0,
+                font=FS,
+            ).pack(side="left")
         StyleBtn(row, "ghost", text="删除", command=lambda: self._del_vd_type(row)).pack(side="left", padx=(6, 0))
         row._val = e
         row._in_total = var_total
@@ -1085,9 +1474,9 @@ class DesktopApp(tk.Tk):
         data = item if isinstance(item, dict) else {}
         row = tk.Frame(self.vd_duration_rule_box, bg=C["card"])
         row.pack(fill="x", pady=3)
-        name = tk.Entry(row, font=MONO, relief="solid", bd=1)
-        lower = tk.Entry(row, font=MONO, relief="solid", bd=1, width=14)
-        upper = tk.Entry(row, font=MONO, relief="solid", bd=1, width=14)
+        name = self._input(row, font=MONO)
+        lower = self._input(row, font=MONO, width=14)
+        upper = self._input(row, font=MONO, width=14)
         name.insert(0, str(data.get("name") or ""))
         lower.insert(0, "" if data.get("min_seconds") in (None, "") else str(data.get("min_seconds")))
         upper.insert(0, "" if data.get("max_seconds") in (None, "") else str(data.get("max_seconds")))
@@ -1141,7 +1530,7 @@ class DesktopApp(tk.Tk):
     def _add_vd_report_cat(self, value: str = "") -> None:
         row = tk.Frame(self.vd_report_cat_box, bg=C["card"])
         row.pack(fill="x", pady=3)
-        e = tk.Entry(row, font=MONO, relief="solid", bd=1)
+        e = self._input(row, font=MONO)
         e.insert(0, value)
         e.pack(side="left", fill="x", expand=True, ipady=4)
         StyleBtn(row, "ghost", text="删除", command=lambda: self._del_vd_report_cat(row)).pack(side="left", padx=(6, 0))
@@ -1180,7 +1569,7 @@ class DesktopApp(tk.Tk):
     def _add_vd_exclude(self, value: str = "") -> None:
         row = tk.Frame(self.vd_exclude_box, bg=C["card"])
         row.pack(fill="x", pady=3)
-        e = tk.Entry(row, font=MONO, relief="solid", bd=1)
+        e = self._input(row, font=MONO)
         e.insert(0, value)
         e.pack(side="left", fill="x", expand=True, ipady=4)
         StyleBtn(row, "ghost", text="删除", command=lambda: self._del_vd_exclude(row)).pack(side="left", padx=(6, 0))
@@ -1221,13 +1610,13 @@ class DesktopApp(tk.Tk):
         if other_only:
             self.vd_exclude_wrap.pack_forget()
             self.vd_type_note.configure(
-                text="这些分类不统计（同样支持包含匹配，如 示例分类3）。没填分类的、以及其他分类，全部计入下面的「其余」。"
+                text="这些分类不统计（同样支持包含匹配，如 wsp）。没填分类的、以及其他分类，全部计入下面的「其余」。"
             )
         else:
             if not self.vd_exclude_wrap.winfo_ismapped():
                 self.vd_exclude_wrap.pack(fill="x", after=self.vd_mode_row)
             self.vd_type_note.configure(
-                text="单独成列的分类：每个分类一列。填 示例分类3 会匹配所有包含 示例分类3 的类型；可用 * 通配符，例如 示例分类4*。没填分类的算进「其余」。"
+                text="单独成列的分类：每个分类一列。填 wsp 会匹配所有包含 wsp 的类型；可用 * 通配符，例如 口播*。没填分类的算进「其余」。"
             )
 
     def _apply_vd_mode(self, name: str) -> None:
@@ -1282,7 +1671,7 @@ class DesktopApp(tk.Tk):
                 self.vd_type_head.pack(fill="x", pady=(0, 2), before=self.vd_type_box)
             for row in self._vd_type_rows:
                 if hasattr(row, "_checks") and not row._checks.winfo_ismapped():
-                    delete_btn = next((child for child in row.winfo_children() if isinstance(child, tk.Button) and str(child.cget("text")) == "删除"), None)
+                    delete_btn = next((child for child in row.winfo_children() if isinstance(child, (tk.Button, StyleBtn)) and str(child.cget("text")) == "删除"), None)
                     if delete_btn is not None:
                         row._checks.pack(side="left", padx=(8, 0), before=delete_btn)
                     else:
@@ -1335,10 +1724,10 @@ class DesktopApp(tk.Tk):
     def _add_vd_extra_col(self, field: str = "分类", column: str = "") -> None:
         row = tk.Frame(self.vd_extra_col_box, bg=C["card"])
         row.pack(fill="x", pady=3)
-        name = tk.Entry(row, font=MONO, relief="solid", bd=1, width=18)
+        name = self._input(row, font=MONO, width=18)
         name.insert(0, field)
         name.pack(side="left", ipady=4)
-        col = tk.Entry(row, font=MONO, relief="solid", bd=1, width=10)
+        col = self._input(row, font=MONO, width=10)
         col.insert(0, column)
         col.pack(side="left", padx=6, ipady=4)
         StyleBtn(row, "ghost", text="删除", command=lambda: self._del_vd_extra_col(row)).pack(side="left")
@@ -1501,7 +1890,7 @@ class DesktopApp(tk.Tk):
         tk.Label(cred_wrap, text="服务账号 JSON 文件", bg=C["card"], fg=C["muted"], font=FS).pack(anchor="w")
         cred_line = tk.Frame(cred_wrap, bg=C["card"])
         cred_line.pack(fill="x", pady=(3, 0))
-        tk.Entry(cred_line, textvariable=self.var_credentials, font=MONO, relief="solid", bd=1).pack(side="left", fill="x", expand=True, ipady=5)
+        self._input(cred_line, font=MONO, textvariable=self.var_credentials).pack(side="left", fill="x", expand=True, ipady=5)
         StyleBtn(cred_line, "ghost", text="选择文件…", command=self._choose_credentials).pack(side="left", padx=(8, 0))
         g = self._row3(c7)
         self._cell(g, 0, "排除帖文id", self.var_exclude)
@@ -1512,13 +1901,13 @@ class DesktopApp(tk.Tk):
     def _add_field(self, item):
         row = tk.Frame(self.field_box, bg=C["card"])
         row.pack(fill="x", pady=3)
-        n = tk.Entry(row, font=MONO, relief="solid", bd=1, width=16)
+        n = self._input(row, font=MONO, width=16)
         n.insert(0, (item or {}).get("name") or "")
         n.pack(side="left", ipady=4, padx=(0, 6))
-        s = tk.Entry(row, font=MONO, relief="solid", bd=1, width=16)
+        s = self._input(row, font=MONO, width=16)
         s.insert(0, (item or {}).get("sheet") or "源数据")
         s.pack(side="left", ipady=4, padx=(0, 6))
-        r = tk.Entry(row, font=MONO, relief="solid", bd=1, width=16)
+        r = self._input(row, font=MONO, width=16)
         r.insert(0, (item or {}).get("range") or "")
         r.pack(side="left", ipady=4, padx=(0, 6))
         StyleBtn(row, "ghost", text="删除", command=lambda: self._del_field(row)).pack(side="left")
@@ -1575,15 +1964,15 @@ class DesktopApp(tk.Tk):
         self._check(enabled,'启用效果视频',self._wm_enabled_vars['effect_video'])
         choices=tk.Frame(c0,bg=C['card']);choices.pack(fill='x',pady=(6,4))
         for kind,label in (('image','配置图片'),('video','配置KB视频'),('effect_video','配置效果视频')):
-            tk.Radiobutton(choices,text=label,variable=self._wm_channel_choice,value=kind,
-                           command=lambda value=kind:self._wm_select_channel(value),bg=C['card'],font=FB).pack(side='left',padx=(0,18))
+            self._radio(choices, label, self._wm_channel_choice, kind,
+                        command=lambda value=kind: self._wm_select_channel(value), font=FB).pack(side='left',padx=(0,18))
         self._wm_channel_label=tk.StringVar(value='正在编辑：图片')
         tk.Label(c0,textvariable=self._wm_channel_label,bg=C['card'],fg=C['head'],font=FB).pack(anchor='w',pady=(6,0))
         self._note(c0,'三个类别分别保存表格、字段和展示规则。发布图库会处理已启用的类别；直接发布无需先汇总。原有视频配置保留为 KB视频。')
         modes=tk.Frame(c0,bg=C['card']);modes.pack(fill='x',pady=6)
         for value,label in (('merged','发布汇总结果'),('direct','直接读取指定表格发布（无需汇总）')):
-            tk.Radiobutton(modes,text=label,variable=self._wm_vars['wm_publish_source'],value=value,
-                           command=self._wm_update_publish_mode,bg=C['card'],font=FS).pack(side='left',padx=(0,16))
+            self._radio(modes, label, self._wm_vars['wm_publish_source'], value,
+                        command=self._wm_update_publish_mode, font=FS).pack(side='left',padx=(0,16))
         direct=self._card(p,'直接发布数据来源','只读取现有 Sheet，不创建或写入汇总表')
         self._wm_direct_card=direct.master
         self._entry(direct,'Google 表格链接（可粘贴带 gid 的工作表链接）',self._wm_vars['wm_direct_url'])
@@ -1606,10 +1995,9 @@ class DesktopApp(tk.Tk):
         self._note(c1, "隐藏的子 Sheet 自动跳过；目标表格同时作为来源时，三个类别的输出 Sheet 均会自动排除。")
         modes=tk.Frame(c1,bg=C['card']);modes.pack(fill='x',pady=(8,3))
         for mode,label in (('exclude','排除列出的子 Sheet'),('include','只读取列出的子 Sheet')):
-            tk.Radiobutton(modes,text=label,variable=self._wm_vars['wm_sheet_filter_mode'],value=mode,
-                           bg=C['card'],font=FS).pack(side='left',padx=(0,18))
+            self._radio(modes, label, self._wm_vars['wm_sheet_filter_mode'], mode, font=FS).pack(side='left',padx=(0,18))
         tk.Label(c1, text="子 Sheet 名称（一行一个，按完整名称匹配；只读一个就填写一个名称）", bg=C["card"], fg=C["muted"], font=FS).pack(anchor="w", pady=(3, 3))
-        self.wm_exclude = tk.Text(c1, height=4, font=F, relief="solid", bd=1)
+        self.wm_exclude = self._text_input(c1, height=4)
         self.wm_exclude.pack(fill="x")
 
         c2 = self._card(p, "2. 自定义汇总表头与来源列", "按下方字段顺序写入")
@@ -1668,7 +2056,7 @@ class DesktopApp(tk.Tk):
         self._cell(row,2,'制作人列（默认 G，可留空）',self._wm_vars['wm_maker_col'])
         self._note(c5, '图片默认延后 4 天，视频默认 7 天，可修改。20 号图片从 24 号零点开始显示。按分类列自动生成网站目录；视频使用 Drive 缩略图并可在页面播放，图片打开大图。Google Drive 文件需允许网站访问者查看。')
         tk.Label(c5,text='不发布到图库的分类（一行一个，按完整分类名称匹配；留空则全部发布）',bg=C['card'],fg=C['muted'],font=FS).pack(anchor='w',pady=(8,3))
-        self.wm_gallery_exclusions=tk.Text(c5,height=3,font=F,relief='solid',bd=1)
+        self.wm_gallery_exclusions=self._text_input(c5,height=3)
         self.wm_gallery_exclusions.pack(fill='x')
         self._note(c5,'填写分类列中的值，例如 SP-灾难类。只过滤当前类别的图库素材，原表和汇总表的数据保留。修改后发布一次生效，定时发布也会应用；填写“未分类”可排除分类为空的素材。')
         c6=self._card(p,'6. 定时汇总与发布','保持软件打开，最小化后继续运行')
@@ -1682,8 +2070,8 @@ class DesktopApp(tk.Tk):
         self._wm_interval_preset=tk.StringVar(value='180')
         presets=tk.Frame(c6,bg=C['card']);presets.pack(fill='x',pady=5)
         for minutes,label in (('180','3小时'),('360','6小时'),('480','8小时'),('720','12小时'),('custom','自定义')):
-            tk.Radiobutton(presets,text=label,variable=self._wm_interval_preset,value=minutes,
-                           command=self._wm_choose_interval,bg=C['card'],font=FS).pack(side='left',padx=(0,12))
+            self._radio(presets, label, self._wm_interval_preset, minutes,
+                        command=self._wm_choose_interval, font=FS).pack(side='left',padx=(0,12))
         row=self._row3(c6)
         self._cell(row,0,'间隔（分钟，可直接修改）',self._wm_vars['wm_schedule_minutes'])
         self._wm_vars['wm_schedule_minutes'].trace_add('write',self._wm_sync_interval_preset)
@@ -1717,7 +2105,7 @@ class DesktopApp(tk.Tk):
             row._url=self._wm_vars['wm_source_url'];row._url.set(url)
         else:row._url=tk.StringVar(value=url)
         tk.Label(row,text=str(len(self._wm_source_rows)+1),width=3,bg=C['card'],fg=C['muted'],font=FS).pack(side='left')
-        tk.Entry(row,textvariable=row._url,font=F).pack(side='left',fill='x',expand=True,ipady=4,padx=(0,6))
+        self._input(row, font=F, textvariable=row._url).pack(side='left',fill='x',expand=True,ipady=4,padx=(0,6))
         StyleBtn(row,'ghost',text='删除',command=lambda:self._delete_wm_source(row)).pack(side='left')
         self._wm_source_rows.append(row)
 
@@ -1733,16 +2121,28 @@ class DesktopApp(tk.Tk):
     def _add_wm_column(self, header="", column="", hyperlink=None) -> None:
         row = tk.Frame(self.wm_columns_box, bg=C["card"])
         row.pack(fill="x", pady=3)
-        row._header = tk.Entry(row, font=F)
+        row._header = self._input(row, font=F)
         row._header.insert(0, header)
         row._header.pack(side="left", fill="x", expand=True, padx=(0, 6), ipady=4)
-        row._column = tk.Entry(row, font=F, width=10)
+        row._column = self._input(row, font=F, width=10)
         row._column.insert(0, column)
         row._column.pack(side="left", padx=(0, 6), ipady=4)
         from sheet_links import is_link_column
         row._link_auto = hyperlink is None
         row._hyperlink = tk.BooleanVar(value=is_link_column({'header': header}) if hyperlink is None else bool(hyperlink))
-        tk.Checkbutton(row,variable=row._hyperlink,bg=C['card'],width=7,command=lambda:setattr(row,'_link_auto',False)).pack(side='left',padx=(0,6))
+        tk.Checkbutton(
+            row,
+            variable=row._hyperlink,
+            bg=C['card'],
+            fg=C['ink'],
+            activebackground=C['card'],
+            activeforeground=C['ink'],
+            selectcolor='#ffffff',
+            highlightthickness=0,
+            bd=0,
+            width=7,
+            command=lambda: setattr(row, '_link_auto', False),
+        ).pack(side='left',padx=(0,6))
         row._header.bind('<KeyRelease>',lambda _e: row._hyperlink.set(is_link_column({'header':row._header.get()})) if row._link_auto else None)
         StyleBtn(row, "ghost", text="删除", command=lambda: self._delete_wm_column(row)).pack(side="left")
         self._wm_column_rows.append(row)
@@ -1972,7 +2372,7 @@ class DesktopApp(tk.Tk):
     def _add_catalog_exclude(self, value: str = "") -> None:
         row = tk.Frame(self.catalog_exclude_box, bg=C["card"])
         row.pack(fill="x", pady=3)
-        e = tk.Entry(row, font=MONO, relief="solid", bd=1)
+        e = self._input(row, font=MONO)
         e.insert(0, value)
         e.pack(side="left", fill="x", expand=True, ipady=4)
         StyleBtn(row, "ghost", text="删除", command=lambda: self._del_catalog_exclude(row)).pack(side="left", padx=(6, 0))
@@ -2167,7 +2567,7 @@ class DesktopApp(tk.Tk):
     def _add_posts_col(self, value: str = "") -> None:
         row = tk.Frame(self.posts_col_box, bg=C["card"])
         row.pack(fill="x", pady=3)
-        e = tk.Entry(row, font=MONO, relief="solid", bd=1, width=8)
+        e = self._input(row, font=MONO, width=8)
         e.insert(0, value)
         e.pack(side="left", ipady=4)
         StyleBtn(row, "ghost", text="删除", command=lambda: self._del_posts_col(row)).pack(side="left", padx=(6, 0))
@@ -2355,7 +2755,7 @@ class DesktopApp(tk.Tk):
         StyleBtn(hint, "ghost", text="清空", command=self._clear_vd_types).pack(side="right", padx=6)
         self.vd_wildcard_note = tk.Label(
             c_type,
-            text="自定义汇总支持包含匹配和通配符：示例分类3 会统计所有带 示例分类3 的分类；示例分类4* 匹配以示例分类4开头的。视频提取按精确分类筛选，不用通配符。",
+            text="自定义汇总支持包含匹配和通配符：wsp 会统计所有带 wsp 的分类；口播* 匹配以口播开头的。视频提取按精确分类筛选，不用通配符。",
             bg=C["card"],
             fg=C["muted"],
             font=FS,
@@ -2399,7 +2799,7 @@ class DesktopApp(tk.Tk):
         self.vd_empty_check = self._check(self.vd_custom_box, "没有分类的也归入「其余」", self.var_vd_empty_to_other)
         self.vd_custom_help = tk.Label(
             self.vd_custom_box,
-            text="方式一：上面 FB/示例分类4 等各占一列，没填分类的算进「其余」。方式二：上面这些分类完全不统计，剩下的（含空白）全部算进「其余」。不要把同一批分类同时填进两处。",
+            text="方式一：上面 FB/口播 等各占一列，没填分类的算进「其余」。方式二：上面这些分类完全不统计，剩下的（含空白）全部算进「其余」。不要把同一批分类同时填进两处。",
             bg=C["card"],
             fg=C["muted"],
             font=FS,
@@ -2661,13 +3061,13 @@ class DesktopApp(tk.Tk):
     def _add_roster_map_row(self, field: str, role: str, column: str) -> None:
         row = tk.Frame(self.roster_map_box, bg=C["card"])
         row.pack(fill="x", pady=3)
-        f = tk.Entry(row, font=MONO, relief="solid", bd=1, width=16)
+        f = self._input(row, font=MONO, width=16)
         f.insert(0, field)
         f.pack(side="left", ipady=4, padx=(0, 6))
-        r = tk.Entry(row, font=MONO, relief="solid", bd=1, width=14)
+        r = self._input(row, font=MONO, width=14)
         r.insert(0, role)
         r.pack(side="left", ipady=4, padx=(0, 6))
-        c = tk.Entry(row, font=MONO, relief="solid", bd=1, width=8)
+        c = self._input(row, font=MONO, width=8)
         c.insert(0, column)
         c.pack(side="left", ipady=4, padx=(0, 6))
         StyleBtn(row, "ghost", text="删除", command=lambda: self._del_roster_map_row(row)).pack(side="left")
@@ -2827,6 +3227,13 @@ class DesktopApp(tk.Tk):
         except Exception as exc:
             self._append_log(f"保存服务账号失败：{exc}")
 
+    def _open_config_transfer(self) -> None:
+        from config_transfer_dialog import ConfigTransferDialog
+        existing=getattr(self,'_transfer_win',None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift();return
+        self._transfer_win=ConfigTransferDialog(self)
+
     def _open_settings(self) -> None:
         existing = getattr(self, "_settings_win", None)
         if existing is not None:
@@ -2852,7 +3259,7 @@ class DesktopApp(tk.Tk):
         tk.Label(head, text="设置", bg=C["head"], fg=C["cream"], font=FH).pack(anchor="w", padx=18, pady=(14, 2))
         tk.Label(
             head,
-            text="服务账号给表格用。图库站点：先登录 Cloudflare，再填自己的域名，一点部署。",
+            text="服务账号给表格用。迁移请用顶部配置导入 / 导出；已有图库复用原站点。",
             bg=C["head"],
             fg="#cbd5e1",
             font=FS,
@@ -2922,13 +3329,13 @@ class DesktopApp(tk.Tk):
         self.var_cf_access_password = tk.StringVar()
         self._entry(
             gallery,
-            "访问密码（本机可查看；留空=打开网页不用密码。改完请再点部署）",
+            "访问密码（修改 / 重置请打开“多账号与发布范围”中的独立密码按钮）",
             self.var_cf_access_password,
             show="•",
         )
         deploy_row = tk.Frame(gallery, bg=C["card"])
         deploy_row.pack(fill="x", padx=14, pady=(4, 8))
-        self.btn_cf_deploy = StyleBtn(deploy_row, "primary", text="3. 生成密钥并部署", command=self._cf_deploy)
+        self.btn_cf_deploy = StyleBtn(deploy_row, "primary", text="3. 管理 / 连接站点", command=self._manage_cf_accounts)
         self.btn_cf_deploy.pack(side="left")
         StyleBtn(deploy_row, "ghost", text="填入此域名的密钥", command=self._restore_cf_site_for_host).pack(
             side="left", padx=(8, 0)
@@ -3013,7 +3420,7 @@ class DesktopApp(tk.Tk):
             justify="left",
         ).pack(anchor="w", padx=18, pady=(16, 8))
         var_token = tk.StringVar()
-        entry = tk.Entry(dlg, textvariable=var_token, font=MONO, show="•", width=48, relief="solid", bd=1)
+        entry = self._input(dlg, font=MONO, textvariable=var_token, show="•", width=48)
         entry.pack(fill="x", padx=18, ipady=6)
         entry.focus_set()
         var_account = tk.StringVar()
@@ -3280,7 +3687,7 @@ class DesktopApp(tk.Tk):
         text.configure(state="disabled")
         btns = tk.Frame(win, bg=C["paper"])
         btns.pack(fill="x", padx=12, pady=8)
-        StyleBtn(btns, "ghost", text="打开日志文件夹", command=lambda: os.startfile(str(LOG_DIR))).pack(side="left")
+        StyleBtn(btns, "ghost", text="打开日志文件夹", command=lambda: _open_folder(LOG_DIR)).pack(side="left")
         StyleBtn(btns, "primary", text="关闭", command=win.destroy).pack(side="right")
 
     def _set_interval(self, minutes: int) -> None:
@@ -3297,10 +3704,10 @@ class DesktopApp(tk.Tk):
     def _add_align_map_row(self, target: str = "", source: str = "") -> None:
         row = tk.Frame(self.align_map_box, bg=C["card"])
         row.pack(fill="x", pady=3)
-        t = tk.Entry(row, font=MONO, relief="solid", bd=1, width=18)
+        t = self._input(row, font=MONO, width=18)
         t.insert(0, target)
         t.pack(side="left", ipady=4, padx=(0, 6))
-        s = tk.Entry(row, font=MONO, relief="solid", bd=1, width=18)
+        s = self._input(row, font=MONO, width=18)
         s.insert(0, source or target)
         s.pack(side="left", ipady=4, padx=(0, 6))
         StyleBtn(row, "ghost", text="删除", command=lambda: self._del_align_map_row(row)).pack(side="left")

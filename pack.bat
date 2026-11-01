@@ -14,6 +14,9 @@ if errorlevel 1 (
 copy /Y config.example.json "dist\数据汇总工具\config.example.json" >nul
 copy /Y 使用说明.txt "dist\数据汇总工具\使用说明.txt" >nul
 copy /Y logo.ico "dist\数据汇总工具\logo.ico" >nul
+copy /Y "web\static\logo.png" "dist\数据汇总工具\logo.png" >nul
+if not exist "dist\数据汇总工具\web\static" mkdir "dist\数据汇总工具\web\static"
+copy /Y "web\static\logo.png" "dist\数据汇总工具\web\static\logo.png" >nul
 copy /Y uninstall-template.bat "dist\数据汇总工具\uninstall.bat" >nul
 echo.
 echo 已生成：%~dp0dist\数据汇总工具\数据汇总工具.exe

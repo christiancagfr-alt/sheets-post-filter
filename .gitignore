@@ -37,5 +37,7 @@ public-export/
 *.key
 service-account*.json
 credentials*.json
+migrated-credentials/
+*.dsconfig
 !.env.example
 !/docs/security-audit-2026-10-30.md

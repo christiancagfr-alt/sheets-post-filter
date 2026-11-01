@@ -36,22 +36,50 @@ for filename in ("_tkinter.pyd", "tcl86t.dll", "tk86t.dll"):
     if source.exists():
         manual_binaries.append((str(source), "."))
 
+SPEC_DIR = Path(globals().get("SPECPATH", ".")).resolve()
+
+if sys.platform == "darwin" and not (SPEC_DIR / "logo.icns").exists():
+    src_png = SPEC_DIR / "web" / "static" / "logo.png"
+    if src_png.exists():
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as _tmp:
+            _iconset = Path(_tmp) / "app.iconset"
+            _iconset.mkdir()
+            for _sz in (16, 32, 128, 256, 512):
+                subprocess.run(["sips", "-z", str(_sz), str(_sz), str(src_png), "--out", str(_iconset / f"icon_{_sz}x{_sz}.png")], check=True, capture_output=True)
+                subprocess.run(["sips", "-z", str(_sz * 2), str(_sz * 2), str(src_png), "--out", str(_iconset / f"icon_{_sz}x{_sz}@2x.png")], check=True, capture_output=True)
+            subprocess.run(["iconutil", "-c", "icns", str(_iconset), "-o", str(SPEC_DIR / "logo.icns")], check=True)
+
 public_datas = []
 for folder in ("web", "promo-site", "summary-gallery"):
-    for path in Path(folder).rglob("*"):
-        if not path.is_file() or any(part.startswith(".") for part in path.parts) or path.is_symlink():
+    folder_path = SPEC_DIR / folder
+    if not folder_path.exists():
+        continue
+    for path in folder_path.rglob("*"):
+        rel_path = path.relative_to(SPEC_DIR)
+        if not path.is_file() or any(part.startswith(".") for part in rel_path.parts) or path.is_symlink():
             continue
         if path.name in {"q-gallery-cache-manifest.json", "_test_publish_body.json"}:
             continue
         if path.suffix.lower() not in {".html", ".js", ".css", ".png", ".jpg", ".webp", ".svg", ".ico"} and path.name not in {"robots.txt", "_headers", "_routes.json"}:
             continue
-        public_datas.append((str(path), str(path.parent)))
+        public_datas.append((str(path), str(rel_path.parent)))
+
+logo_datas = [(str(SPEC_DIR / "logo.ico"), ".")]
+if (SPEC_DIR / "web" / "static" / "logo.png").exists():
+    logo_datas.append((str(SPEC_DIR / "web" / "static" / "logo.png"), "."))
+    logo_datas.append((str(SPEC_DIR / "web" / "static" / "logo.png"), str(Path("web") / "static")))
+if (SPEC_DIR / "logo.icns").exists():
+    logo_datas.append((str(SPEC_DIR / "logo.icns"), "."))
+
+app_icon = str(SPEC_DIR / "logo.icns") if sys.platform == "darwin" and (SPEC_DIR / "logo.icns").exists() else str(SPEC_DIR / "logo.ico")
 
 a = Analysis(
-    ["desktop_app.py"],
-    pathex=[],
+    [str(SPEC_DIR / "desktop_app.py")],
+    pathex=[str(SPEC_DIR)],
     binaries=manual_binaries,
-    datas=public_datas + [("logo.ico", ".")] + manual_datas,
+    datas=public_datas + logo_datas + manual_datas,
     hiddenimports=hidden
     + [
         "google.auth",
@@ -109,7 +137,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    icon="logo.ico",
+    icon=app_icon,
 )
 
 coll = COLLECT(
@@ -122,10 +150,22 @@ coll = COLLECT(
     name="数据汇总工具",
 )
 
+import shutil as _shutil
+_dist_app_dir = Path(globals().get("DISTPATH", str(SPEC_DIR / "dist"))) / "数据汇总工具"
+if _dist_app_dir.is_dir():
+    for _src, _dst in (
+        (SPEC_DIR / "logo.ico", _dist_app_dir / "logo.ico"),
+        (SPEC_DIR / "web" / "static" / "logo.png", _dist_app_dir / "logo.png"),
+        (SPEC_DIR / "web" / "static" / "logo.png", _dist_app_dir / "web" / "static" / "logo.png"),
+    ):
+        if _src.is_file():
+            _dst.parent.mkdir(parents=True, exist_ok=True)
+            _shutil.copy2(_src, _dst)
+
 if sys.platform == "darwin":
     from version import APP_VERSION
 
-    icon_file = "logo.icns" if Path("logo.icns").exists() else "logo.ico"
+    icon_file = app_icon
     app = BUNDLE(
         coll,
         name="数据汇总工具.app",
@@ -137,6 +177,7 @@ if sys.platform == "darwin":
             "CFBundleShortVersionString": APP_VERSION,
             "CFBundleVersion": APP_VERSION,
             "NSHighResolutionCapable": True,
+            "NSRequiresAquaSystemAppearance": True,
             "LSApplicationCategoryType": "public.app-category.utilities",
         },
     )

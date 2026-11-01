@@ -30,7 +30,21 @@ _CONFIG_WRITE_LOCK = threading.Lock()
 def resource_dir() -> Path:
     """PyInstaller 打包后的只读资源目录（网页界面）。"""
     if getattr(sys, "frozen", False):
-        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        meipass = getattr(sys, "_MEIPASS", "")
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates = []
+        if meipass:
+            candidates.append(Path(meipass).resolve())
+        candidates.extend([
+            exe_dir,
+            exe_dir / "_internal",
+            exe_dir.parent / "Resources",
+            exe_dir.parent / "Frameworks",
+        ])
+        for candidate in candidates:
+            if (candidate / "web" / "static" / "logo.png").exists() or (candidate / "web").exists() or (candidate / "logo.png").exists():
+                return candidate
+        return candidates[0] if candidates else exe_dir
     return Path(__file__).resolve().parent
 
 
