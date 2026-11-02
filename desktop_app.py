@@ -49,6 +49,7 @@ from fetch_posts import (
 from dataclasses import asdict
 from template_registry import TEMPLATES, TEMPLATE_NAMES, partition_menus, new_template_settings
 from worksheet_merge import read_merge_headers
+from desktop_theme import COLORS as C, ColorButton, install_theme
 
 from app import (
     _align_schedule_snapshot,
@@ -97,20 +98,6 @@ from promo_deploy import (
 )
 
 MUTEX_PORT = 18765
-C = {
-    "ink": "#1e293b",
-    "muted": "#64748b",
-    "paper": "#f1f5f9",
-    "card": "#ffffff",
-    "line": "#dce3ed",
-    "head": "#1e3a5f",
-    "accent": "#2563eb",
-    "ok": "#059669",
-    "bad": "#e11d48",
-    "log": "#101c30",
-    "cream": "#f8fafc",
-    "sa": "#17263d",
-}
 _UI_FONT = "PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei UI"
 _MONO_FONT = "Menlo" if sys.platform == "darwin" else "Cascadia Mono"
 F = (_UI_FONT, 12 if sys.platform == "darwin" else 10)
@@ -278,150 +265,31 @@ def _kill_stale_mutex() -> bool:
     return killed
 
 
-class StyleBtn(tk.Label):
-    """Cross-platform button widget that preserves bg/fg colors on macOS Aqua."""
-
+class StyleBtn(ColorButton):
     def __init__(self, master, kind="ghost", **kw):
-        self._command = kw.pop("command", None)
-        self._state = str(kw.pop("state", "normal") or "normal")
         if kind == "primary":
-            defaults = dict(
-                bg=C["accent"],
-                fg="#ffffff",
-                activebackground="#1d4ed8",
-                activeforeground="#ffffff",
-                bd=0,
-                relief="flat",
-                highlightthickness=1,
-                highlightbackground="#1d4ed8",
-            )
+            defaults = dict(bg=C["accent"], fg="white", activebackground="#1d4ed8", activeforeground="white", bd=0)
         elif kind == "head":
-            defaults = dict(
-                bg="#274b79",
-                fg=C["cream"],
-                activebackground="#3b82f6",
-                activeforeground="#ffffff",
-                bd=0,
-                relief="flat",
-                highlightthickness=1,
-                highlightbackground="#476b9e",
-            )
+            defaults = dict(bg=C["head"], fg=C["cream"], activebackground="#274b79", activeforeground=C["cream"], bd=0)
         else:
             defaults = dict(
                 bg=C["card"],
                 fg=C["ink"],
                 activebackground="#e2e8f0",
                 activeforeground=C["ink"],
-                bd=0,
-                relief="flat",
-                highlightthickness=1,
-                highlightbackground="#cbd5e1",
+                bd=1,
+                relief="solid",
+                highlightthickness=0,
             )
         defaults.update(
             font=F,
-            padx=12,
+            padx=10,
             pady=6,
             cursor="hand2",
+            highlightbackground=C["line"],
         )
         defaults.update(kw)
-        self._normal_bg = defaults.get("bg") or defaults.get("background") or C["card"]
-        self._normal_fg = defaults.get("fg") or defaults.get("foreground") or C["ink"]
-        self._active_bg = defaults.pop("activebackground", self._normal_bg)
-        self._active_fg = defaults.pop("activeforeground", self._normal_fg)
-        self._normal_cursor = defaults.get("cursor", "hand2")
         super().__init__(master, **defaults)
-        self.bind("<Enter>", self._on_enter, add="+")
-        self.bind("<Leave>", self._on_leave, add="+")
-        self.bind("<ButtonRelease-1>", self._on_click, add="+")
-        if self._state == "disabled":
-            self._apply_state()
-
-    def _apply_state(self) -> None:
-        try:
-            if self._state == "disabled":
-                super().configure(bg="#cbd5e1", fg="#64748b", cursor="")
-            else:
-                super().configure(bg=self._normal_bg, fg=self._normal_fg, cursor=self._normal_cursor)
-        except tk.TclError:
-            pass
-
-    def configure(self, cnf=None, **kw):
-        if isinstance(cnf, dict):
-            kw = {**cnf, **kw}
-        elif cnf is not None:
-            return super().configure(cnf)
-        if not kw:
-            return super().configure()
-        if "command" in kw:
-            self._command = kw.pop("command")
-        if "bg" in kw or "background" in kw:
-            self._normal_bg = kw.get("bg") or kw.get("background")
-        if "fg" in kw or "foreground" in kw:
-            self._normal_fg = kw.get("fg") or kw.get("foreground")
-        if "activebackground" in kw:
-            self._active_bg = kw.pop("activebackground")
-        if "activeforeground" in kw:
-            self._active_fg = kw.pop("activeforeground")
-        if "cursor" in kw:
-            self._normal_cursor = kw["cursor"]
-        state_changed = False
-        if "state" in kw:
-            self._state = str(kw.pop("state") or "normal")
-            state_changed = True
-        result = super().configure(**kw) if kw else None
-        if state_changed or self._state == "disabled":
-            self._apply_state()
-        return result
-
-    config = configure
-
-    def cget(self, key: str):
-        if key == "state":
-            return self._state
-        if key == "command":
-            return self._command
-        if key == "activebackground":
-            return self._active_bg
-        if key == "activeforeground":
-            return self._active_fg
-        return super().cget(key)
-
-    def __getitem__(self, key: str):
-        return self.cget(key)
-
-    def __setitem__(self, key: str, value) -> None:
-        self.configure(**{key: value})
-
-    def invoke(self):
-        if self._state != "disabled" and callable(self._command):
-            return self._command()
-        return None
-
-    def _on_enter(self, _event=None) -> None:
-        if self._state != "disabled":
-            try:
-                super().configure(bg=self._active_bg, fg=self._active_fg)
-            except tk.TclError:
-                pass
-
-    def _on_leave(self, _event=None) -> None:
-        if self._state != "disabled":
-            try:
-                super().configure(bg=self._normal_bg, fg=self._normal_fg)
-            except tk.TclError:
-                pass
-
-    def _on_click(self, event=None) -> None:
-        if self._state == "disabled":
-            return
-        if event is not None:
-            try:
-                w, h = self.winfo_width(), self.winfo_height()
-                if not (0 <= event.x < w and 0 <= event.y < h):
-                    return
-            except tk.TclError:
-                return
-        self.invoke()
 
 
 class DesktopApp(tk.Tk):
@@ -479,83 +347,7 @@ class DesktopApp(tk.Tk):
         self.geometry("1180x820+80+40")
         self.minsize(980, 680)
         self.configure(bg=C["paper"])
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        style.configure("TFrame", background=C["paper"])
-        style.configure("TLabel", background=C["paper"], foreground=C["ink"], font=F)
-        style.configure(
-            "TButton",
-            background=C["card"],
-            foreground=C["ink"],
-            bordercolor="#cbd5e1",
-            lightcolor=C["card"],
-            darkcolor=C["card"],
-            padding=(10, 5),
-            font=F,
-        )
-        style.map(
-            "TButton",
-            background=[("disabled", "#e2e8f0"), ("pressed", "#cbd5e1"), ("active", "#e2e8f0")],
-            foreground=[("disabled", "#94a3b8"), ("pressed", C["ink"]), ("active", C["ink"])],
-        )
-        style.configure(
-            "TCheckbutton",
-            background=C["paper"],
-            foreground=C["ink"],
-            indicatorbackground=C["card"],
-            indicatorforeground=C["accent"],
-            font=F,
-        )
-        style.map(
-            "TCheckbutton",
-            background=[("active", C["paper"])],
-            foreground=[("active", C["ink"]), ("disabled", "#94a3b8")],
-            indicatorbackground=[("selected", C["accent"]), ("!selected", C["card"])],
-            indicatorforeground=[("selected", "#ffffff")],
-        )
-        style.configure(
-            "TEntry",
-            fieldbackground="#f8fafc",
-            foreground=C["ink"],
-            insertcolor=C["ink"],
-            bordercolor="#cbd5e1",
-            lightcolor="#cbd5e1",
-            darkcolor="#cbd5e1",
-            padding=5,
-            font=F,
-        )
-        style.map(
-            "TEntry",
-            fieldbackground=[("readonly", "#f1f5f9"), ("focus", "#ffffff")],
-            foreground=[("disabled", "#94a3b8"), ("!disabled", C["ink"])],
-            bordercolor=[("focus", C["accent"])],
-        )
-        style.configure(
-            "TCombobox",
-            padding=4,
-            font=F,
-            fieldbackground="#f8fafc",
-            background="#e2e8f0",
-            foreground=C["ink"],
-            arrowcolor=C["ink"],
-            bordercolor="#cbd5e1",
-            lightcolor="#cbd5e1",
-            darkcolor="#cbd5e1",
-        )
-        style.map(
-            "TCombobox",
-            fieldbackground=[("readonly", "#f8fafc"), ("readonly", "focus", "#ffffff")],
-            foreground=[("readonly", C["ink"]), ("readonly", "focus", C["ink"])],
-            selectbackground=[("readonly", "#f8fafc"), ("readonly", "focus", "#ffffff")],
-            selectforeground=[("readonly", C["ink"]), ("readonly", "focus", C["ink"])],
-            background=[("active", "#cbd5e1"), ("pressed", "#cbd5e1")],
-        )
-        style.configure("Vertical.TScrollbar", background="#cbd5e1", troughcolor=C["paper"], borderwidth=0, arrowsize=12)
-        self.option_add("*TCombobox*Listbox.background", C["card"])
-        self.option_add("*TCombobox*Listbox.foreground", C["ink"])
-        self.option_add("*TCombobox*Listbox.selectBackground", C["accent"])
-        self.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
-        self.option_add("*TCombobox*Listbox.font", F)
+        install_theme(self, F)
         self.bind_all("<MouseWheel>", self._wheel_page, add="+")
         self.bind("<Control-s>", lambda _event: self._save())
         self._apply_window_icon()
@@ -879,7 +671,7 @@ class DesktopApp(tk.Tk):
             command=self._check_updates,
             bg="#274b79",
             fg="#ffffff",
-            activebackground="#3b82f6",
+            activebackground="#1d4ed8",
             activeforeground="#ffffff",
             highlightbackground="#5278a8",
             padx=10,
@@ -893,7 +685,7 @@ class DesktopApp(tk.Tk):
             command=self._open_settings,
             bg="#274b79",
             fg="#ffffff",
-            activebackground="#3b82f6",
+            activebackground="#1d4ed8",
             activeforeground="#ffffff",
             highlightbackground="#5278a8",
             padx=10,
@@ -907,7 +699,7 @@ class DesktopApp(tk.Tk):
             command=self._open_config_transfer,
             bg="#274b79",
             fg="#ffffff",
-            activebackground="#3b82f6",
+            activebackground="#1d4ed8",
             activeforeground="#ffffff",
             highlightbackground="#5278a8",
             padx=10,
@@ -946,7 +738,7 @@ class DesktopApp(tk.Tk):
         side_actions.pack(side="bottom", fill="x", padx=8, pady=(6, 12))
         StyleBtn(
             side_actions, "head", text="修改名称", command=self._rename_menu,
-            bg="#243b5a", fg="#ffffff", activebackground="#3b82f6", activeforeground="#ffffff",
+            bg="#243b5a", fg="#ffffff", activebackground="#1d4ed8", activeforeground="#ffffff",
             highlightbackground="#3b5984", padx=10, pady=5,
         ).pack(side="left")
         StyleBtn(
