@@ -141,6 +141,15 @@ def _bring_existing_window() -> bool:
     launch look like the app opened and immediately quit.
     """
     try:
+        with socket.create_connection(('127.0.0.1', MUTEX_PORT), timeout=0.6) as existing:
+            existing.sendall(b'sheets-summary:show-window:v1')
+            if existing.recv(64) == b'sheets-summary:window-restored:v1':
+                return True
+    except OSError:
+        pass
+    if sys.platform != 'win32':
+        return False
+    try:
         import ctypes
         from ctypes import wintypes
 
@@ -4402,7 +4411,30 @@ class DesktopApp(tk.Tk):
         self.destroy()
 
 
-def main() -> None:
+def _serve_window_requests(app, mutex) -> None:
+    """Local, read-only restore-window IPC for Finder / repeated launches."""
+    mutex.settimeout(0.5)
+    def serve():
+        while app._alive:
+            try:
+                client, _address = mutex.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            with client:
+                try:
+                    client.settimeout(0.5)
+                    if client.recv(64) != b'sheets-summary:show-window:v1':
+                        continue
+                    app.after(0, app.show_main_window)
+                    client.sendall(b'sheets-summary:window-restored:v1')
+                except (OSError, RuntimeError, tk.TclError):
+                    pass
+    threading.Thread(target=serve,daemon=True).start()
+
+
+def main(*, on_ready=None) -> None:
     os.chdir(SCRIPT_DIR)
     try:
         import faulthandler
@@ -4440,7 +4472,10 @@ def main() -> None:
             return
     app = DesktopApp()
     app._mutex = mutex
+    _serve_window_requests(app, mutex)
     app.after_idle(app.show_main_window)
+    if on_ready is not None:
+        on_ready(app)
     try:
         app.mainloop()
     except Exception:
