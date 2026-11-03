@@ -2,6 +2,11 @@ name: Build and publish release
 
 on:
   workflow_dispatch:
+    inputs:
+      mac_arm_only:
+        description: Build only Apple Silicon using the macOS 15 fallback
+        type: boolean
+        default: false
   push:
     tags:
       - "v*"
@@ -11,6 +16,7 @@ permissions:
 
 jobs:
   windows-release:
+    if: ${{ !inputs.mac_arm_only }}
     timeout-minutes: 25
     permissions:
       contents: read
@@ -128,11 +134,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-latest
-            arch: arm64
-          - os: macos-15-intel
-            arch: x86_64
+        include: ${{ fromJSON(inputs.mac_arm_only && '[{"os":"macos-15","arch":"arm64"}]' || '[{"os":"macos-latest","arch":"arm64"},{"os":"macos-15-intel","arch":"x86_64"}]') }}
     runs-on: ${{ matrix.os }}
     outputs:
       version: ${{ steps.meta.outputs.version }}
