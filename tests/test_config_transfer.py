@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from config_transfer import export_bundle, read_bundle, import_bundle
+from config_transfer import export_bundle, read_bundle, import_bundle, select_export_data
 from fetch_posts import Config
 from local_secrets import atomic_json_write, read_private_json
 
@@ -134,6 +134,50 @@ class TransferTests(unittest.TestCase):
             self.assertTrue(Path(restored['credentials_file']).exists())
             self.assertNotEqual(Path(restored['credentials_file']),original)
             self.assertEqual(len(restored['credentials_files']),1)
+
+    def test_partial_export_drops_unselected_menus_top_level_data_and_unrelated_accounts(self):
+        cfg=configuration()
+        cfg.update(target_url='https://example.com/not-selected',cf_publish_secret='example-unselected-key')
+        cfg['ui_menus'].append({'id':'other-menu','name':'示例未选','template':'filter',
+            'settings':{'cf_profile_id':'other-account','target_url':'https://example.com/not-selected'}})
+        cfg['ui_archived_menus']=[{'id':'archived','name':'示例归档','template':'video','settings':{}}]
+        cfg['ui_active_menu']='other-menu'
+        cf=cloudflare()
+        cf.update(api_token='example-legacy-unrelated-token',secret='example-legacy-secret')
+        cf['profiles'].append({'id':'other-account','account_id':'other-account','api_token':'example-other-token'})
+        cf['profiles'][0].update(all_menus=True,allowed_menu_ids=['example-menu','other-menu'])
+        cf['sites'].append({**cf['sites'][0],'host':'other.example.com','account_id':'other-account'})
+        before=copy.deepcopy((cfg,cf))
+        selected,accounts=select_export_data(cfg,cf,['example-menu'])
+        self.assertEqual([m['id'] for m in selected['ui_menus']],['example-menu'])
+        self.assertEqual(selected['ui_archived_menus'],[])
+        self.assertEqual(selected['ui_active_menu'],'example-menu')
+        self.assertEqual(selected['target_url'],'')
+        self.assertEqual(selected['cf_publish_secret'],'')
+        self.assertEqual([p['id'] for p in accounts['profiles']],['example-owner'])
+        self.assertEqual(accounts['profiles'][0]['allowed_menu_ids'],['example-menu'])
+        self.assertFalse(accounts['profiles'][0]['all_menus'])
+        self.assertEqual(len(accounts['sites']),1)
+        self.assertNotIn('api_token',accounts)
+        self.assertEqual((cfg,cf),before)
+
+    def test_partial_export_roundtrip_preserves_unselected_local_menu_and_scope(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory=Path(folder)
+            cfg=configuration()
+            cfg['ui_menus'].append({'id':'other-menu','name':'示例未选','template':'video','settings':{}})
+            cf=cloudflare();cf['profiles'][0]['allowed_menu_ids'].append('other-menu')
+            atomic_json_write(directory/'config.json',cfg);atomic_json_write(directory/'cloudflare.json',cf)
+            export_bundle(directory/'selected.dsconfig',PASSWORD,cfg,cf,menu_ids=['example-menu'],include_credentials=False)
+            payload=read_bundle(directory/'selected.dsconfig',PASSWORD)
+            self.assertEqual(len(payload['config']['ui_menus']),1)
+            import_bundle(payload,directory)
+            self.assertEqual(len(read_private_json(directory/'config.json')['ui_menus']),2)
+            self.assertEqual(set(read_private_json(directory/'cloudflare.json')['profiles'][0]['allowed_menu_ids']),{'example-menu','other-menu'})
+
+    def test_partial_export_requires_valid_nonempty_selection(self):
+        for ids in ([],['missing-menu']):
+            with self.assertRaises(ValueError):select_export_data(configuration(),cloudflare(),ids)
 
 
 if __name__=='__main__':unittest.main()

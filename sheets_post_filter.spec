@@ -76,7 +76,7 @@ if (SPEC_DIR / "logo.icns").exists():
 app_icon = str(SPEC_DIR / "logo.icns") if sys.platform == "darwin" and (SPEC_DIR / "logo.icns").exists() else str(SPEC_DIR / "logo.ico")
 
 a = Analysis(
-    [str(SPEC_DIR / "desktop_app.py")],
+    [str(SPEC_DIR / "desktop_bootstrap.py")],
     pathex=[str(SPEC_DIR)],
     binaries=manual_binaries,
     datas=public_datas + logo_datas + manual_datas,

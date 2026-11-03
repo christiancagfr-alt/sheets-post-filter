@@ -39,8 +39,48 @@ def _atomic_bytes(path, data):
             os.unlink(temporary)
 
 
-def export_bundle(path, password, config, cloudflare, *, include_credentials=True):
+def select_export_data(config, cloudflare, menu_ids):
+    """Return only selected menus and their local publishing dependencies."""
+    from dataclasses import asdict
+    from urllib.parse import urlsplit
+    from fetch_posts import Config
+    from promo_deploy import known_gallery_sites
+    from cf_accounts import profiles
+    ids = set(menu_ids)
+    menus = [copy.deepcopy(m) for m in config.get('ui_menus') or [] if m.get('id') in ids]
+    if not ids or {m['id'] for m in menus} != ids:
+        raise ValueError('请至少勾选一个现有配置。')
+    active = next((m for m in menus if m['id'] == config.get('ui_active_menu')), menus[0])
+    # Reset inherited top-level settings too: an unselected active menu must not
+    # leak its URLs, fields, credentials or account into a partial export.
+    selected = asdict(Config())
+    selected.update({k: copy.deepcopy(v) for k,v in active['settings'].items() if k in selected})
+    selected.update(ui_menus=menus, ui_archived_menus=[], ui_active_menu=active['id'])
+    selected['credentials_file'] = config.get('credentials_file') or ''
+    selected['credentials_files'] = copy.deepcopy(config.get('credentials_files') or [])
+    hosts, profile_ids = set(), set()
+    for menu in menus:
+        settings = menu['settings']
+        if settings.get('cf_profile_id'):
+            profile_ids.add(settings['cf_profile_id'])
+        host = settings.get('wm_gallery_host') or urlsplit(settings.get('cf_publish_url') or '').hostname
+        if host:
+            hosts.add(host.lower())
+    sites = [copy.deepcopy(s) for s in known_gallery_sites(cloudflare) if s['host'] in hosts]
+    profile_ids.update(s.get('profile_id') or s.get('account_id') for s in sites)
+    owners = {s.get('account_id') for s in sites}
+    accounts = [p for p in profiles(cloudflare) if p['id'] in profile_ids or p.get('account_id') in owners]
+    for account in accounts:
+        # Imported scope must never include unpublished / unselected menus.
+        allowed = ids if account.get('all_menus') else ids.intersection(account.get('allowed_menu_ids') or [])
+        account.update(all_menus=False, allowed_menu_ids=sorted(allowed))
+    return selected, {'profiles': accounts, 'sites': sites}
+
+
+def export_bundle(path, password, config, cloudflare, *, include_credentials=True, menu_ids=None):
     from fetch_posts import Config, discover_credential_files, normalize_credential_paths, _credential_candidates
+    if menu_ids is not None:
+        config, cloudflare = select_export_data(config, cloudflare, menu_ids)
     cfg = Config()
     for key, value in config.items():
         if hasattr(cfg, key):
@@ -48,7 +88,10 @@ def export_bundle(path, password, config, cloudflare, *, include_credentials=Tru
     credentials = []
     if include_credentials:
         menus = list(cfg.ui_menus or []) + list(cfg.ui_archived_menus or [])
-        paths = normalize_credential_paths(discover_credential_files(cfg, menus) + _credential_candidates(cfg, menus))
+        # Partial exports include only explicitly configured accounts. Do not
+        # discover unrelated credentials*.json files next to the application.
+        discovered = discover_credential_files(cfg, menus, include_copied=menu_ids is None)
+        paths = normalize_credential_paths(discovered + _credential_candidates(cfg, menus))
         for name in paths:
             file = Path(name)
             if file.stat().st_size > 1024 * 1024:
@@ -200,8 +243,16 @@ def import_bundle(payload, directory):
         old = next((s for s in known_gallery_sites(cf) if s['host'] == new['host']), None)
         if old and any(old.get(key) != new.get(key) for key in ('account_id', 'project', 'bucket', 'kind')):
             raise ValueError('同一域名对应不同账号或部署资源，未导入。请核对备份来源。')
+    incoming_profiles = copy.deepcopy(incoming_cf.get('profiles') or [])
+    for profile in incoming_profiles:
+        old = next((p for p in cf.get('profiles') or [] if p.get('id') == profile.get('id')), None)
+        if old:
+            # Partial exports carry only their selected scope. Importing one
+            # must not revoke existing local menus sharing the same account.
+            profile['allowed_menu_ids'] = list(dict.fromkeys(list(old.get('allowed_menu_ids') or []) + list(profile.get('allowed_menu_ids') or [])))
+            profile['all_menus'] = bool(old.get('all_menus') or profile.get('all_menus'))
     final_cf = {**cf, **incoming_cf, 'sites': sites,
-                'profiles': _merge_rows(cf.get('profiles'), incoming_cf.get('profiles'), 'id')}
+                'profiles': _merge_rows(cf.get('profiles'), incoming_profiles, 'id')}
     originals = {p: p.read_bytes() if p.exists() else None for p in (config_path, cf_path, *files)}
     backup = directory / 'private-backup' / ('before-import-' + secrets.token_hex(8) + '.json')
     backup.parent.mkdir(parents=True, exist_ok=True)

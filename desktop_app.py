@@ -357,6 +357,9 @@ class DesktopApp(tk.Tk):
         self._sync_schedulers()
         self._tick_id = self.after(300, self._tick)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        if sys.platform == 'darwin':
+            # Finder / Dock reopen events must restore the existing Tk window.
+            self.createcommand('::tk::mac::ReopenApplication', self.show_main_window)
 
         def _tk_exc(exc, val, tb):
             err = "".join(traceback.format_exception(exc, val, tb))
@@ -367,6 +370,18 @@ class DesktopApp(tk.Tk):
                 pass
 
         self.report_callback_exception = _tk_exc
+
+    def show_main_window(self) -> None:
+        self.deiconify()
+        self.lift()
+        if sys.platform == 'darwin':
+            # Aqua may create a valid window while keeping the app behind Finder.
+            try:
+                self.focus_force()
+            except tk.TclError:
+                pass
+        else:
+            self.focus_set()
 
     # ----- layout helpers -----
     def _card(self, parent, title, em="", collapsed=False):
@@ -4425,9 +4440,7 @@ def main() -> None:
             return
     app = DesktopApp()
     app._mutex = mutex
-    app.lift()
-    app.attributes("-topmost", True)
-    app.after(800, lambda: app.attributes("-topmost", False))
+    app.after_idle(app.show_main_window)
     try:
         app.mainloop()
     except Exception:

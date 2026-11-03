@@ -59,6 +59,10 @@ jobs:
         shell: pwsh
         run: python -m PyInstaller --noconfirm --clean sheets_post_filter.spec
 
+      - name: Verify built Windows startup
+        shell: pwsh
+        run: python tools/check_frozen_startup.py "dist/数据汇总工具/数据汇总工具.exe"
+
       - name: Prepare release archive
         id: package
         shell: pwsh
@@ -186,6 +190,9 @@ jobs:
       - name: Build macOS application
         run: python -m PyInstaller --noconfirm --clean sheets_post_filter.spec
 
+      - name: Build and verify macOS DMG installation
+        run: python tools/package_macos_dmg.py "dist/数据汇总工具.app" "release/data-summary-tool-macos-${{ matrix.arch }}-v${VERSION}.dmg"
+
       - name: Package macOS zip
         run: |
           set -euo pipefail
@@ -202,19 +209,23 @@ jobs:
       - name: Attest macOS asset
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-path: release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.zip
+          subject-path: |
+            release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.zip
+            release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.dmg
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-${{ matrix.arch }}
-          path: release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.zip
+          path: |
+            release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.zip
+            release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.dmg
 
   publish-release:
     permissions:
       contents: write
     needs: [windows-release, macos-release]
-    if: needs.windows-release.result == 'success' && needs.macos-release.result == 'success'
+    if: startsWith(github.ref, 'refs/tags/v') && needs.windows-release.result == 'success' && needs.macos-release.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout release notes
@@ -232,9 +243,9 @@ jobs:
           VERSION: ${{ needs.windows-release.outputs.version }}
         run: |
           set -euo pipefail
-          find artifacts -type f \( -name '*.zip' -o -name '*.exe' \) -print
-          mapfile -t FILES < <(find artifacts -type f \( -name '*.zip' -o -name '*.exe' \))
-          test "${#FILES[@]}" -eq 4
+          find artifacts -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.dmg' \) -print
+          mapfile -t FILES < <(find artifacts -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.dmg' \))
+          test "${#FILES[@]}" -eq 6
           TAG="v${VERSION}"
           NOTES="$(cat <<EOF
           数据汇总工具 ${TAG}
