@@ -3449,7 +3449,8 @@ class DesktopApp(tk.Tk):
                         "User-Agent": f"sheets-post-filter/{APP_VERSION}",
                     },
                 )
-                with urlopen(req, timeout=15) as response:
+                from secure_http import create_ssl_context
+                with urlopen(req, timeout=15, context=create_ssl_context()) as response:
                     data = json.loads(response.read().decode("utf-8"))
                 latest = str(data.get("tag_name") or data.get("name") or "").strip()
                 url = str(data.get("html_url") or RELEASES_URL)

@@ -5,6 +5,10 @@ import sys
 
 
 def main():
+    if '--https-smoke-test' in sys.argv:
+        from https_check import run_https_check
+        run_https_check()
+        return
     if '--startup-smoke-test' in sys.argv:
         try:
             from startup_check import run_startup_check

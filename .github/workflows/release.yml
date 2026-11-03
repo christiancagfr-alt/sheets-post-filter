@@ -61,7 +61,9 @@ jobs:
 
       - name: Verify built Windows startup
         shell: pwsh
-        run: python tools/check_frozen_startup.py "dist/数据汇总工具/数据汇总工具.exe"
+        run: |
+          python tools/check_frozen_startup.py "dist/数据汇总工具/数据汇总工具.exe"
+          python tools/check_frozen_https.py "dist/数据汇总工具/数据汇总工具.exe"
 
       - name: Prepare release archive
         id: package
@@ -202,6 +204,9 @@ jobs:
 
       - name: Build and verify macOS DMG installation
         run: python tools/package_macos_dmg.py "dist/数据汇总工具.app" "release/data-summary-tool-macos-${{ matrix.arch }}-v${VERSION}.dmg"
+
+      - name: Verify built macOS HTTPS certificate chain
+        run: python tools/check_frozen_https.py "dist/数据汇总工具.app"
 
       - name: Package macOS zip
         run: |

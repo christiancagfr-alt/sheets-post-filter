@@ -68,7 +68,8 @@ SKIP_SUFFIXES = {".md", ".map"}
 
 
 def _ssl_ctx() -> ssl.SSLContext:
-    return ssl.create_default_context()
+    from secure_http import create_ssl_context
+    return create_ssl_context()
 
 
 def token_store_path() -> Path:

@@ -1,5 +1,6 @@
 """Network boundary for credential requests: HTTPS and no redirects."""
 import ssl
+import certifi
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, build_opener
 
@@ -21,6 +22,17 @@ def validate_https(url, *, hosts=None):
     return url
 
 
+def create_ssl_context():
+    """Retain OS trust and add the CA bundle shipped inside the frozen app.
+
+    Python's compiled-in macOS certificate path may not exist on another Mac.
+    requests already uses certifi; urllib must load it explicitly as well.
+    """
+    context = ssl.create_default_context()
+    context.load_verify_locations(cafile=certifi.where())
+    return context
+
+
 def credential_urlopen(request, timeout):
     validate_https(request.full_url)
-    return build_opener(NoRedirect(), HTTPSHandler(context=ssl.create_default_context())).open(request, timeout=timeout)
+    return build_opener(NoRedirect(), HTTPSHandler(context=create_ssl_context())).open(request, timeout=timeout)
