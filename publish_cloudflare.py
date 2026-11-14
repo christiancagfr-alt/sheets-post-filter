@@ -25,7 +25,12 @@ HEADER_TO_ASSET = {
     "文案类型": "copyType", "OCR": "ocr", "OCR翻译": "ocrTranslation",
     "图片类型": "category", "音频文本": "audioText", "音频文本翻译": "audioTranslation",
     "题材类型": "topicType", "来源类型": "sourceType", "缩略图": "thumbnailUrl",
-    "交教会": "water", "转换率": "conversionRate", "美工": "designer",
+    "交教会": "water", "交教会时间": "waterTime", "转换率": "conversionRate", "美工": "designer",
+}
+HEADER_ALIASES = {
+    "水滴时间": "交教会时间",
+    "水滴日期": "交教会时间",
+    "交教会日期": "交教会时间",
 }
 URL_FIELDS = {"帖文链接", "图片链接", "缩略图", "头像"}
 _NOISE_RE = re.compile(
@@ -48,7 +53,11 @@ def _norm_header(value: Any) -> str:
 
 def _canonical_header(value: Any) -> str:
     key = _norm_header(value)
-    return next((name for name in HEADER_TO_ASSET if _norm_header(name) == key), "")
+    direct = next((name for name in HEADER_TO_ASSET if _norm_header(name) == key), "")
+    if direct:
+        return direct
+    alias = next((target for name, target in HEADER_ALIASES.items() if _norm_header(name) == key), "")
+    return alias if alias in HEADER_TO_ASSET else ""
 
 
 def _looks_like_header(row: list[Any] | None) -> bool:
@@ -81,6 +90,17 @@ def _text(value: Any) -> str:
     if isinstance(value, datetime):
         return value.strftime("%Y-%m-%d")
     return str(value).strip()
+
+
+def _timestamp_text(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if value is None:
+        return ""
+    dt = to_datetime(value)
+    if dt:
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    return _text(value)
 
 
 def extract_url_from_cell(value: Any) -> str:
@@ -187,6 +207,7 @@ def rows_to_assets(
     assets = []
     for offset, row in enumerate(rows):
         asset = {field: _text(_cell(row, index.get(header))) for header, field in HEADER_TO_ASSET.items()}
+        asset["waterTime"] = _timestamp_text(_cell(row, index.get("交教会时间")))
         link = _first_http(asset["postLink"])
         if not link:
             continue

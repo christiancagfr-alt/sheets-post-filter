@@ -6,7 +6,7 @@ const DRIVE_CACHE_URL = "/api/drive-cache";
 const CACHE_PROXY_URL = "/api/cache-proxy";
 const DB_VERSION = 1;
 const PAGE_SIZE = 1000;
-const INITIAL_VISIBLE_ROWS = 100;
+const INITIAL_VISIBLE_ROWS = 1000;
 const LOAD_MORE_ROWS = 100;
 const SHARED_DB_NAME = "q-gallery-cache-v1";
 // 与首页共用：优先 R2 CDN Manifest（浏览器直读）
@@ -188,7 +188,7 @@ async function syncSharedCache({ reset = false } = {}) {
   }
 
   try {
-    const loaded = await syncSharedCacheSnapshot();
+    const loaded = await syncSharedCacheSnapshot({ fresh: reset, replace: reset });
     if (!loaded) {
       // 关键：首页已有本地数据时，云端失败也不清榜、不报「整站不可用」
       if (state.records.size > 0) {
@@ -213,7 +213,7 @@ async function syncSharedCache({ reset = false } = {}) {
   }
 }
 
-async function syncSharedCacheSnapshot() {
+async function syncSharedCacheSnapshot({ fresh = false, replace = false } = {}) {
   // 1) CDN / Drive Manifest 分片（与首页一致，浏览器直读 CDN）
   const candidates = [
     getManifestUrl(),
@@ -224,8 +224,8 @@ async function syncSharedCacheSnapshot() {
 
   for (const manifestUrl of [...new Set(candidates)]) {
     try {
-      const data = await fetchManifestAllChunks(manifestUrl);
-      if (data && (await applySnapshotData(data))) return true;
+      const data = await fetchManifestAllChunks(manifestUrl, { fresh });
+      if (data && (await applySnapshotData(data, { replace }))) return true;
     } catch (error) {
       console.warn("manifest load failed", manifestUrl, error);
     }
@@ -234,8 +234,8 @@ async function syncSharedCacheSnapshot() {
   // 2) 整包 DIRECT_CACHE_URL
   if (DIRECT_CACHE_URL) {
     try {
-      const data = await fetchJsonUrl(DIRECT_CACHE_URL);
-      if (data && (await applySnapshotData(data))) return true;
+      const data = await fetchJsonUrl(DIRECT_CACHE_URL, { fresh });
+      if (data && (await applySnapshotData(data, { replace }))) return true;
     } catch (error) {
       console.warn("direct cache failed", error);
     }
@@ -244,8 +244,8 @@ async function syncSharedCacheSnapshot() {
   return false;
 }
 
-async function fetchManifestAllChunks(manifestUrl) {
-  const manifest = await fetchJsonUrl(manifestUrl);
+async function fetchManifestAllChunks(manifestUrl, options = {}) {
+  const manifest = await fetchJsonUrl(manifestUrl, options);
   const chunks = Array.isArray(manifest.chunks) ? manifest.chunks : [];
   if (!chunks.length) {
     // 可能是整包 JSON
@@ -264,7 +264,7 @@ async function fetchManifestAllChunks(manifestUrl) {
         ? `https://drive.google.com/uc?export=download&id=${encodeURIComponent(chunk.fileId)}`
         : "");
     if (!url) continue;
-    const part = await fetchJsonUrl(url);
+    const part = await fetchJsonUrl(url, options);
     const rows = Array.isArray(part.rows)
       ? part.rows
       : Array.isArray(part.assets)
@@ -284,13 +284,16 @@ async function fetchManifestAllChunks(manifestUrl) {
   };
 }
 
-async function fetchJsonUrl(url) {
+async function fetchJsonUrl(url, { fresh = false } = {}) {
   const text = String(url || "");
   const isCdn =
     /r2\.dev|cloudflarestorage\.com|pages\.dev/i.test(text) || text.startsWith("/") || new URL(text, window.location.href).origin === window.location.origin;
+  const fetchUrl = fresh && isCdn
+    ? `${text}${text.includes("?") ? "&" : "?"}_qg_reload=${Date.now()}`
+    : text;
   try {
-    const response = await fetch(text, {
-      cache: isCdn ? "default" : "no-store",
+    const response = await fetch(fetchUrl, {
+      cache: fresh || !isCdn ? "no-store" : "default",
       mode: "cors",
       credentials: "omit"
     });
@@ -313,7 +316,7 @@ async function fetchJsonUrl(url) {
   }
 }
 
-async function applySnapshotData(data) {
+async function applySnapshotData(data, { replace = false } = {}) {
   const runId = data.runId || data.buildId || "";
   const raw = Array.isArray(data.rows)
     ? data.rows
@@ -325,8 +328,9 @@ async function applySnapshotData(data) {
   if (!rows.length && toNumber(data.totalRows) > 0) return false;
   if (!rows.length) return false;
 
+  if (replace) state.records = new Map();
   rows.forEach(record => state.records.set(record.id, record));
-  if (rows.length && state.db) await saveRecords(rows);
+  if (rows.length && state.db) await saveRecords(rows, { replace });
   render();
 
   const sourceLabel = /r2|promo|cdn|gallery-cache/i.test(String(data.source || ""))
@@ -337,6 +341,7 @@ async function applySnapshotData(data) {
 }
 
 function normalizeSnapshotRecord(row, runId) {
+  const raw = Array.isArray(row && row.raw) ? row.raw : Array.isArray(row) ? row : [];
   const assetId = row.catalogId && row.rowNumber
     ? `${row.catalogId}-${row.rowNumber}-${row.id || row.fileId || ""}`
     : row.id;
@@ -357,9 +362,11 @@ function normalizeSnapshotRecord(row, runId) {
     previewUrl: row.previewUrl || row.thumbnailUrl || "",
     thumbnailFallbackUrl: row.thumbnailFallbackUrl || row.nameImage || "",
     lead: row.lead,
-    water: row.water,
-    waterTime: row.waterTime || row.waterDate,
-    date: row.date,
+    water: [row.water, row["交教会"], raw[25]]
+      .find(value => value !== undefined && value !== null && String(value).trim() !== ""),
+    waterTime: row.waterTime || row["交教会时间"] || raw[28],
+    date: row.date || raw[9],
+    raw,
     authorName: row.authorName || row.maker || "",
     maker: row.maker || row.authorName || "",
     authorId: row.authorId || row.pageId || row["专页id"] || row["专页ID"] || "",
@@ -371,23 +378,14 @@ function normalizeSnapshotRecord(row, runId) {
 function render() {
   syncTabs();
   const records = Array.from(state.records.values());
-  let range = getRangeWindow(state.range, records);
+  const range = getRangeWindow(state.range, records);
   state.ranked = buildRankedRecords(records, range);
-  if (!state.ranked.length) {
-    const fallbackRange = getFallbackRangeWindow(state.range, records);
-    if (fallbackRange) {
-      const fallbackRanked = buildRankedRecords(records, fallbackRange);
-      if (fallbackRanked.length) {
-        range = fallbackRange;
-        state.ranked = fallbackRanked;
-      }
-    }
-  }
 
   els.recordCount.textContent = String(records.length);
   els.rankCount.textContent = String(state.ranked.length);
   els.rangeText.textContent = range.label;
-  els.summaryText.textContent = `${range.label}按${rankMetric.label}数从高到低排序。`;
+  els.summaryText.textContent = `${range.label}按${rankMetric.label}数从高到低排序，日期只用于筛选；数值相同时按日期从新到旧。`;
+
   renderRows();
 }
 
@@ -396,6 +394,7 @@ function buildRankedRecords(records, range) {
     .filter(record => toNumber(record[rankMetric.key]) > 0)
     .filter(record => isInsideRange(getRankDate(record), range.start, range.end))
     .sort((a, b) => {
+      // 所有榜单先按指标值从高到低；日期只在数值相同的时候作次级排序。
       const metricDiff = toNumber(b[rankMetric.key]) - toNumber(a[rankMetric.key]);
       if (metricDiff) return metricDiff;
       return dateNumber(getRankDate(b)) - dateNumber(getRankDate(a));
@@ -403,7 +402,7 @@ function buildRankedRecords(records, range) {
 }
 
 function getRankDate(record) {
-  if (rankMetric.key === "water") return record.waterTime || record.date;
+  if (rankMetric.key === "water") return record.waterTime;
   return record[rankMetric.dateKey];
 }
 
@@ -881,7 +880,13 @@ function syncTabs() {
 }
 
 function getRangeWindow(range, records = []) {
-  const today = startOfLocalDay(new Date());
+  const latestMetricDate = records
+    .filter(record => toNumber(record[rankMetric.key]) > 0)
+    .map(record => parseRecordDate(getRankDate(record)))
+    .filter(Boolean)
+    .sort((a, b) => b.getTime() - a.getTime())[0];
+  // 排行时间范围以当前缓存中最新的有效指标日期为基准，避免设备时区/缓存时差造成空榜。
+  const today = startOfLocalDay(latestMetricDate || new Date());
   let start;
   let label;
 
@@ -907,31 +912,6 @@ function getRangeWindow(range, records = []) {
   return { label, start, end: addDays(today, 1) };
 }
 
-function getFallbackRangeWindow(range, records = []) {
-  const metricRecords = records
-    .filter(record => toNumber(record[rankMetric.key]) > 0)
-    .map(record => parseRecordDate(getRankDate(record)))
-    .filter(Boolean)
-    .sort((a, b) => b.getTime() - a.getTime());
-  if (!metricRecords.length) return null;
-
-  const latest = startOfLocalDay(metricRecords[0]);
-  // 当天 / 昨天：若日历上无数据，回退到「数据里最新一天」
-  if (range === "today" || range === "yesterday") {
-    return {
-      label: `最新一天（${formatDateOnly(latest)}）`,
-      start: latest,
-      end: addDays(latest, 1)
-    };
-  }
-
-  const days = range === "30" ? 30 : 7;
-  return {
-    label: `数据最新 ${days} 天`,
-    start: addDays(latest, -(days - 1)),
-    end: addDays(latest, 1)
-  };
-}
 
 function isInsideRange(value, start, end) {
   const date = parseRecordDate(value);
@@ -942,9 +922,34 @@ function parseRecordDate(value) {
   const text = stringOr(value);
   if (!text) return null;
 
-  const match = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  // 旧发布缓存可能把 Google Sheets 日期序列号保存成字符串，
+  // 例如 "46330"。Date("46330") 会误判成公元 46330 年。
+  if (/^\d{4,6}(?:\.\d+)?$/.test(text)) {
+    const serial = Number(text);
+    if (serial >= 20000 && serial <= 80000) {
+      const wholeDays = Math.floor(serial);
+      const dayFraction = serial - wholeDays;
+      const utc = new Date(Date.UTC(1899, 11, 30) + wholeDays * 86400000);
+      const totalSeconds = Math.round(dayFraction * 86400);
+      return new Date(
+        utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate(),
+        Math.floor(totalSeconds / 3600),
+        Math.floor((totalSeconds % 3600) / 60),
+        totalSeconds % 60
+      );
+    }
+  }
+
+  const match = text.match(/^(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})(?:日)?(?:[ T]+(?:(上午|下午|AM|PM)\s*)?(\d{1,2}):(\d{2})(?::(\d{2}))?)?/i);
   if (match) {
-    return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    let hour = Number(match[5] || 0);
+    const meridiem = String(match[4] || "").toLowerCase();
+    if ((meridiem === "下午" || meridiem === "pm") && hour < 12) hour += 12;
+    if ((meridiem === "上午" || meridiem === "am") && hour === 12) hour = 0;
+    return new Date(
+      Number(match[1]), Number(match[2]) - 1, Number(match[3]),
+      hour, Number(match[6] || 0), Number(match[7] || 0)
+    );
   }
 
   const parsed = new Date(text);
@@ -973,12 +978,13 @@ function normalizeRecord(input) {
     postId,
     postLink,
     lead: input.lead,
-    water: input.water ?? input.waterDrops ?? input.droplets ?? input["水滴"] ?? input.z ?? input.Z ?? input.columnZ ?? input.colZ,
-    waterTime: stringOr(input.waterTime || input.waterDate || input["水滴时间"] || input.aa || input.AA || input.columnAA || input.colAA),
+    water: [input.water, input["交教会"], input.raw?.[25]]
+      .find(value => value !== undefined && value !== null && String(value).trim() !== ""),
+    waterTime: stringOr(input.waterTime || input["交教会时间"] || input.raw?.[28]),
     content: stringOr(input.content),
     ocrTranslation: stringOr(input.ocrTranslation),
     audioTranslation: stringOr(input.audioTranslation),
-    date: stringOr(input.date),
+    date: stringOr(input.date || input.raw?.[9]),
     category: stringOr(input.category || input.type),
     postType: stringOr(input.postType),
     pageName: stringOr(input.pageName),
@@ -1066,10 +1072,14 @@ function toNumber(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   const text = stringOr(value).replace(/,/g, "");
   if (!text) return 0;
-  const number = Number.parseFloat(text.replace("%", ""));
+  // 缓存值可能带日期/emoji/单位，如“2026-11-13 💧12”；先去掉日期再提取数值。
+  const numericText = text.replace(/\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b/g, " ");
+  const match = numericText.match(/[-+]?\d+(?:\.\d+)?/);
+  if (!match) return 0;
+  const number = Number(match[0]);
   if (!Number.isFinite(number)) return 0;
-  const suffix = text.match(/[kKmM万亿]/);
-  const multiplier = !suffix ? 1 : /k/i.test(suffix[0]) ? 1000 : /m/i.test(suffix[0]) ? 1000000 : suffix[0] === "万" ? 10000 : 100000000;
+  const suffix = numericText.match(/[kKmM千萬万亿]/);
+  const multiplier = !suffix ? 1 : /k/i.test(suffix[0]) || suffix[0] === "千" ? 1000 : /m/i.test(suffix[0]) ? 1000000 : /万|萬/.test(suffix[0]) ? 10000 : 100000000;
   return number * multiplier;
 }
 
@@ -1180,10 +1190,11 @@ function idbGetAll(storeName) {
   });
 }
 
-function saveRecords(records) {
+function saveRecords(records, { replace = false } = {}) {
   return new Promise((resolve, reject) => {
     const tx = state.db.transaction("records", "readwrite");
     const store = tx.objectStore("records");
+    if (replace) store.clear();
     records.forEach(record => store.put(record));
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);

@@ -1,26 +1,6 @@
-# Google Apps Script（结果表 → JSON 缓存）
+# 旧版 Google Apps Script 兼容文件
 
-原 Vercel 部署包未附带 `.gs`，已从同源工程补回并加上 **J/AB 列**。
+正常流程不需要把这里的脚本同步到 Google 表格，也不需要运行 `qGalleryExportDriveCacheManifest`。
+桌面软件的「发布图库」会读取表格实际表头，通过 `publish_cloudflare.py` 直接生成 JSON 并发布到 Cloudflare R2；网站部署包会跳过本目录。
 
-## 文件
-
-- `drive-cache-manifest-export.gs` — **日更导出主脚本**（你贴的这份）：跑 `qGalleryExportDriveCacheManifest()`
-- `google-apps-script-water.gs` — 可选：在线 API / 内表缓存后端
-- `appsscript.json` — Apps Script 清单
-
-## 关键列
-
-| Excel | 字段 | 用途 |
-|-------|------|------|
-| J | `likes` | 点赞排行榜 |
-| AB | `designer` | 美工名字，前端显示为 `名字 · 美工` |
-
-源表读取宽度：`SOURCE_READ_COLS = 28`（A–AB）。
-
-## 部署到 Google
-
-1. 打开绑定结果表的脚本项目  
-2. 用本目录脚本覆盖对应文件  
-3. 重新跑缓存刷新 / `qGalleryExportDriveCacheManifest`  
-4. 确认输出 JSON 的每条记录含 `likes`、`designer`  
-5. 把 JSON 公共链接填到 Vercel `PUBLIC_JSON_CACHE_URL`
+本目录仅供仍在使用旧版 Drive / Apps Script 缓存流程的站点维护。新表格水滴时间字段由桌面发布器读取 AC 列表头（`交教会时间`，也兼容 `水滴时间`、`水滴日期`、`交教会日期`），不需要手动部署此处脚本。

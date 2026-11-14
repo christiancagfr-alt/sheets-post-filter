@@ -779,7 +779,7 @@ function createQGalleryExportState_(sheet, opt) {
       " 空行）"
   );
 
-  const lastColumn = Math.max(sheet.getLastColumn(), 28);
+  const lastColumn = 29;
   return {
     status: "running",
     buildId: Utilities.getUuid(),
@@ -1129,7 +1129,8 @@ function trashQGalleryNamedFile_(folder, name) {
  */
 function readQGalleryAssetRowsBatch_(sheet, startRow, numRows, lastColumn) {
   if (numRows <= 0) return [];
-  const cols = Math.max(Number(lastColumn) || 28, 28);
+  // 当前发布表头固定到 AC（29 列），不把格式残留列当作数据字段。
+  const cols = 29;
   const headers = getQGallerySourceHeaderMap_(sheet, cols);
   const col = function(name, fallback, aliases) { return getQGalleryColumnIndex_(headers, name, fallback, aliases); };
   const displayValues = sheet.getRange(startRow, 1, numRows, cols).getDisplayValues();
@@ -1143,7 +1144,7 @@ function readQGalleryAssetRowsBatch_(sheet, startRow, numRows, lastColumn) {
   const postLinkCol = col("帖文链接", 2), avatarCol = col("头像", 19);
   const imageCol = col("图片链接", 4, ["缩略图"]), thumbnailCol = col("缩略图", 22, ["图片链接"]);
   const dateCol = col("发帖日期", 7, ["日期"]);
-  const waterTimeCol = col("交教会时间", Object.keys(headers).length ? -1 : 26, ["水滴时间", "水滴日期", "交教会日期"]);
+  const waterTimeCol = col("交教会时间", -1, ["水滴时间", "水滴日期", "交教会日期"]);
   const avatarFormulas = readColumn(avatarCol, "formula"), avatarValues = readColumn(avatarCol, "value");
   const postLinkFormulas = readColumn(postLinkCol, "formula");
   const imageFormulas = readColumn(imageCol, "formula"), imageValues = readColumn(imageCol, "value");
@@ -1182,7 +1183,7 @@ function readQGalleryAssetRowsBatch_(sheet, startRow, numRows, lastColumn) {
       rowNumber: rowNumber, title: name || postType || "素材 " + rowNumber, name: name,
       postId: postId, postLink: postLink, lead: display(col("引流", 3)),
       water: display(col("交教会", 25, ["水滴", "水滴数"])),
-      waterTime: display(waterTimeCol >= 0 ? waterTimeCol : dateCol), sourceUrl: postLink,
+      waterTime: waterTimeCol >= 0 ? display(waterTimeCol) : "", sourceUrl: postLink,
       fileId: fileId, previewUrl: previewUrl, thumbnailUrl: previewUrl,
       thumbnailFallbackUrl: nameImage || "",
       viewUrl: postFileId ? "https://drive.google.com/file/d/" + encodeURIComponent(postFileId) + "/view" : postLink,
@@ -1206,7 +1207,7 @@ function readQGalleryAssetRowsBatch_(sheet, startRow, numRows, lastColumn) {
 }
 
 function getQGalleryHeaderInfo_(sheet, width) {
-  const known = ["管理员", "语言", "专页id", "专页名字", "帖文链接", "引流", "帖文ID", "头像", "图片链接", "发帖日期", "点赞", "评论", "分享", "帖文类型", "帖文内容", "帖文翻译", "文案类型", "OCR", "OCR翻译", "图片类型", "音频文本", "音频文本翻译", "题材类型", "来源类型", "缩略图", "交教会", "转换率", "美工"];
+  const known = ["管理员", "语言", "专页id", "专页名字", "帖文链接", "引流", "帖文ID", "头像", "图片链接", "发帖日期", "点赞", "评论", "分享", "帖文类型", "帖文内容", "帖文翻译", "文案类型", "OCR", "OCR翻译", "图片类型", "音频文本", "音频文本翻译", "题材类型", "来源类型", "缩略图", "交教会", "交教会时间", "水滴时间", "转换率", "美工"];
   let best = {}, bestScore = 0, bestRow = 0;
   for (let rowNumber = 1; rowNumber <= Math.min(2, sheet.getLastRow()); rowNumber += 1) {
     const cells = sheet.getRange(rowNumber, 1, 1, width).getDisplayValues()[0], map = {};
@@ -1222,7 +1223,7 @@ function getQGallerySourceHeaderMap_(sheet, width) {
 }
 
 function getQGalleryDataStartRow_(sheet) {
-  const width = Math.max(1, Math.min(Math.max(sheet.getLastColumn(), 28), 60));
+  const width = 29;
   const info = getQGalleryHeaderInfo_(sheet, width);
   return info.score >= 2 ? info.row + 1 : Number(Q_GALLERY_DRIVE_EXPORT.startRow || 3);
 }
@@ -1240,7 +1241,7 @@ function getQGalleryColumnIndex_(headers, name, fallback, aliases) {
 /** 兼容旧调用：整表读（大表易超时，仅调试用） */
 function readQGalleryAssetRows_(sheet) {
   const lastRow = sheet.getLastRow();
-  const lastColumn = Math.max(sheet.getLastColumn(), 28);
+  const lastColumn = 29;
   const dataStartRow = getQGalleryDataStartRow_(sheet);
   if (lastRow < dataStartRow) return [];
   return readQGalleryAssetRowsBatch_(

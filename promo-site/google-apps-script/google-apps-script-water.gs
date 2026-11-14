@@ -11,8 +11,8 @@ const Q_CONFIG = {
   DRIVE_CACHE_FOLDER_ID_PROPERTY: "Q_GALLERY_DRIVE_CACHE_FOLDER_ID",
   SECRET_PROPERTY: "Q_GALLERY_API_SECRET",
   DATA_START_ROW: 3,
-  // 读到 AB 列：J=点赞(index9)，AB=美工(index27) → 列数至少 28
-  SOURCE_READ_COLS: 28,
+  // 当前最新版表头为 A:AC，共 29 列。
+  SOURCE_READ_COLS: 29,
   DEFAULT_LIMIT: 1000,
   DEFAULT_BATCH_SIZE: 1000,
   MIN_BATCH_SIZE: 300,
@@ -208,7 +208,7 @@ function assets_(payload) {
   const take = Math.min(limit, available);
   const records = take
       ? (function() {
-        const readCols = Q_CONFIG.SOURCE_READ_COLS || 28;
+        const readCols = 29;
         const range = source.getRange(startRow, 1, take, readCols);
         const values = range.getValues();
         const formulas = range.getFormulas();
@@ -415,7 +415,7 @@ function refreshStep_(payload) {
     state.updatedAt = state.stepStartedAt;
     setRefreshState_(state);
 
-    const readCols = Q_CONFIG.SOURCE_READ_COLS || 28;
+    const readCols = 29;
     const range = source.getRange(state.stepRow, 1, take, readCols);
     const values = range.getValues();
     const formulas = range.getFormulas();
@@ -934,7 +934,7 @@ function mapRow_(row, rowNumber, formulaRow, richTextRow, anchoredAvatarUrl, sou
   const thumbnailFallbackUrl = imageUrl_(row[thumbnailFallbackIndex], formulaRow && formulaRow[thumbnailFallbackIndex], richTextRow && richTextRow[thumbnailFallbackIndex]);
   const pageName = text_(value("专页名字", 24, ["页名", "管理员"]));
   const dateIndex = index("发帖日期", 7, ["日期"]);
-  const waterTimeIndex = index("交教会时间", sourceHeaders && sourceHeaders.__headerRow ? -1 : 26, ["水滴时间", "水滴日期", "交教会日期"]);
+  const waterTimeIndex = index("交教会时间", -1, ["水滴时间", "水滴日期", "交教会日期"]);
 
   return {
     id: postId || postLink || "row-" + rowNumber,
@@ -944,8 +944,8 @@ function mapRow_(row, rowNumber, formulaRow, richTextRow, anchoredAvatarUrl, sou
     postLink: postLink,
     lead: value("引流", 3),
     water: value("交教会", 25, ["水滴", "水滴数"]),
-    // 新表头没有独立水滴日期时，按发帖日期进入水滴榜时间范围。
-    waterTime: dateTimeText_(row[waterTimeIndex >= 0 ? waterTimeIndex : dateIndex]),
+    // 水滴时间仅从其命名表头读取；不回退到发帖日期或固定列。
+    waterTime: waterTimeIndex >= 0 ? dateTimeText_(row[waterTimeIndex]) : "",
     thumbnailUrl: thumbnailUrl,
     thumbnailFallbackUrl: thumbnailFallbackUrl,
     content: text_(value("帖文内容", 5, ["内容"])),
@@ -973,11 +973,11 @@ function mapRow_(row, rowNumber, formulaRow, richTextRow, anchoredAvatarUrl, sou
 }
 
 function getSourceHeaderMap_(sheet) {
-  const known = ["管理员", "语言", "专页id", "专页名字", "帖文链接", "引流", "帖文ID", "头像", "图片链接", "发帖日期", "点赞", "评论", "分享", "帖文类型", "帖文内容", "帖文翻译", "文案类型", "OCR", "OCR翻译", "图片类型", "音频文本", "音频文本翻译", "题材类型", "来源类型", "缩略图", "交教会", "转换率", "美工"];
+  const known = ["管理员", "语言", "专页id", "专页名字", "帖文链接", "引流", "帖文ID", "头像", "图片链接", "发帖日期", "点赞", "评论", "分享", "帖文类型", "帖文内容", "帖文翻译", "文案类型", "OCR", "OCR翻译", "图片类型", "音频文本", "音频文本翻译", "题材类型", "来源类型", "缩略图", "交教会", "交教会时间", "水滴时间", "转换率", "美工"];
   let best = {};
   let bestScore = 0;
   let bestRow = 0;
-  const width = Math.max(1, Math.min(sheet.getLastColumn(), Q_CONFIG.SOURCE_READ_COLS || 28));
+  const width = 29;
   for (let rowNumber = 1; rowNumber <= Math.min(2, sheet.getLastRow()); rowNumber += 1) {
     const cells = sheet.getRange(rowNumber, 1, 1, width).getDisplayValues()[0];
     const map = {};

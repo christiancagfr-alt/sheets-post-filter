@@ -4,16 +4,21 @@ from types import SimpleNamespace
 from publish_cloudflare import rows_to_assets, split_sheet_for_publish, overlay_formula_urls, publish_configured_sheet
 from cf_accounts import site_for_menu
 
-HEADERS = ['管理员&#x20;', '语言', '专页id ', '专页名字', '帖文链接', '引流', '帖文ID', '头像', '图片链接', '发帖日期', '👍点赞', '💬评论', '🔁分享', '帖文类型', '📜帖文内容', '帖文翻译', '文案类型', 'OCR', 'OCR翻译', '图片类型', '音频文本', '音频文本翻译', '题材类型', '来源类型', '缩略图', '交教会', '转换率', '美工', '', '', '']
-ROW = ['示例管理员', '示例语言', 'example-page', '示例专页', 'https://example.com/post', 0, 'example-post', 'https://example.com/avatar.jpg', 'https://example.com/full.jpg', '2026-01-02', 1200, 0, 3, '图片', '示例正文', '示例翻译', '示例文案类型', '示例OCR', '示例OCR翻译', '示例图片类型', '示例音频', '示例音频翻译', '示例题材', '示例来源', 'https://example.com/thumb.jpg', 4, 0.25, '示例美工', '不可读取的旧AC列', '', '']
+HEADERS = ['管理员&#x20;', '语言', '专页id ', '专页名字', '帖文链接', '引流', '帖文ID', '头像', '图片链接', '发帖日期', '👍点赞', '💬评论', '🔁分享', '帖文类型', '📜帖文内容', '帖文翻译', '文案类型', 'OCR', 'OCR翻译', '图片类型', '音频文本', '音频文本翻译', '题材类型', '来源类型', '缩略图', '交教会', '转换率', '美工', '交教会时间']
+ROW = ['示例管理员', '示例语言', 'example-page', '示例专页', 'https://example.com/post', 0, 'example-post', 'https://example.com/avatar.jpg', 'https://example.com/full.jpg', '2026-01-02', 1200, 0, 3, '图片', '示例正文', '示例翻译', '示例文案类型', '示例OCR', '示例OCR翻译', '示例图片类型', '示例音频', '示例音频翻译', '示例题材', '示例来源', 'https://example.com/thumb.jpg', 4, 0.25, '示例美工', '2026-01-03 08:30:00']
 
 class HeaderPublishingTests(unittest.TestCase):
     def test_actual_headers_and_reordered_columns_produce_identical_assets(self):
         expected=rows_to_assets(HEADERS,[ROW])[0]
         actual=rows_to_assets(list(reversed(HEADERS)),[list(reversed(ROW))])[0]
         self.assertEqual(actual,expected)
-        for key,value in {'name':'示例管理员','pageName':'示例专页','maker':'example-page','postTranslation':'示例翻译','copyType':'示例文案类型','topicType':'示例题材','likes':'1200','comments':'0','water':'4','conversionRate':'0.25','group':'','thumbnailUrl':'https://example.com/thumb.jpg','imageUrl':'https://example.com/full.jpg'}.items():
+        for key,value in {'name':'示例管理员','pageName':'示例专页','maker':'example-page','postTranslation':'示例翻译','copyType':'示例文案类型','topicType':'示例题材','likes':'1200','comments':'0','water':'4','waterTime':'2026-01-03 08:30:00','conversionRate':'0.25','group':'','thumbnailUrl':'https://example.com/thumb.jpg','imageUrl':'https://example.com/full.jpg'}.items():
             self.assertEqual(actual[key],value)
+
+    def test_water_timestamp_serial_is_normalized_and_exported(self):
+        serial = 46025.5
+        item = rows_to_assets(HEADERS, [[*ROW[:28], serial]])[0]
+        self.assertEqual(item["waterTime"], "2026-01-03 12:00:00")
 
     def test_missing_optional_fields_never_read_old_positions(self):
         item=rows_to_assets(['帖文链接','管理员'],[['https://example.com/post','示例']])[0]
@@ -67,8 +72,8 @@ class ActualSourceTests(unittest.TestCase):
         ws=Mock();ws.title='示例';ws.get_all_values.return_value=[HEADERS,ROW];ws.batch_get.return_value=[]
         ss=Mock();ss.worksheet.return_value=ws
         headers,rows=read_post_source(ss,'https://example.com/sheet','示例','1',lambda _:None)
-        self.assertEqual(len(headers),28);self.assertEqual(len(rows[0]),28)
-        self.assertEqual(headers[0],'管理员&#x20;');self.assertEqual(rows[0][-1],'示例美工')
+        self.assertEqual(len(headers),29);self.assertEqual(len(rows[0]),29)
+        self.assertEqual(headers[0],'管理员&#x20;');self.assertEqual(rows[0][27],'示例美工');self.assertEqual(rows[0][28],'2026-01-03 08:30:00')
 
     def test_filter_run_uses_actual_header_order_not_configured_legacy_fields(self):
         from fetch_posts import Config, run

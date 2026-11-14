@@ -26,7 +26,7 @@ function getManifestUrl() {
 }
 // 兼容旧代码引用
 const DIRECT_CACHE_MANIFEST_URL = window.Q_GALLERY_DRIVE_CACHE_MANIFEST_URL || "";
-const SNAPSHOT_NORMALIZATION_VERSION = "map3";
+const SNAPSHOT_NORMALIZATION_VERSION = "map4-water-header";
 const DIRECT_CACHE_URLS = Array.isArray(window.Q_GALLERY_DRIVE_CACHE_URLS)
   ? window.Q_GALLERY_DRIVE_CACHE_URLS.filter(Boolean)
   : [];
@@ -1780,14 +1780,15 @@ function normalizeRecord(input) {
     topicType: stringOr(input.topicType),
     imageUrl: stringOr(input.imageUrl),
     rewrite: stringOr(input.rewrite),
-    date: stringOr(input.date),
+    date: stringOr(input.date || input.raw?.[9]),
     category: normalizeCatalogValue(input.category || input.type),
     likes: pickLikesField(input),
     designer: pickDesignerField(input),
     comments: input.comments,
     shares: input.shares,
-    water: input.water ?? input["交教会"],
-    waterTime: stringOr(input.waterTime),
+    water: [input.water, input["交教会"], input.raw?.[25]]
+      .find(value => value !== undefined && value !== null && String(value).trim() !== ""),
+    waterTime: stringOr(input.waterTime || input.waterDate || input["水滴时间"] || input["交教会时间"] || input.raw?.[28]),
     postType: normalizeCatalogValue(input.postType),
     ocr: stringOr(input.ocr),
     ocrTranslation: stringOr(input.ocrTranslation),
@@ -1991,15 +1992,11 @@ function trimNumber(value, decimals) {
 }
 
 function formatWaterDisplay(record) {
-  const value = formatCompactNumber(record.water);
-  const time = formatDateOnly(record.waterTime || record.date) || "无日期";
-  return `📅${time} 💧 ${value}`;
+  return `💧 ${formatCompactNumber(record.water)}`;
 }
 
 function formatWaterFullValue(record) {
-  const value = formatNumber(record.water);
-  const time = formatDateOnly(record.waterTime || record.date) || "无日期";
-  return `📅${time} 💧 ${value}`;
+  return `💧 ${formatNumber(record.water)}`;
 }
 
 function formatDateOnly(value) {
