@@ -225,7 +225,11 @@ def rows_to_assets(
             mediaMode="video" if "视频" in asset["postType"]+asset["category"] else "image",
         )
         assets.append(asset)
-    if log: log(f"按实际表头读取：有效 {len(assets)} 条，跳过 {len(rows)-len(assets)} 条无帖文链接记录")
+    if log:
+        log(f"按实际表头读取：有效 {len(assets)} 条，跳过 {len(rows)-len(assets)} 条无帖文链接记录")
+        image_categories = sum(bool(asset.get("category")) for asset in assets)
+        topic_categories = sum(bool(asset.get("topicType")) for asset in assets)
+        log(f"分类读取：T列图片类型 {image_categories} 条，W列题材类型 {topic_categories} 条")
     return assets
 
 

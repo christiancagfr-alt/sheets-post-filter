@@ -26,7 +26,7 @@ function getManifestUrl() {
 }
 // 兼容旧代码引用
 const DIRECT_CACHE_MANIFEST_URL = window.Q_GALLERY_DRIVE_CACHE_MANIFEST_URL || "";
-const SNAPSHOT_NORMALIZATION_VERSION = "map4-water-header";
+const SNAPSHOT_NORMALIZATION_VERSION = "map5-category-topic";
 const DIRECT_CACHE_URLS = Array.isArray(window.Q_GALLERY_DRIVE_CACHE_URLS)
   ? window.Q_GALLERY_DRIVE_CACHE_URLS.filter(Boolean)
   : [];
