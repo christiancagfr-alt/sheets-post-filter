@@ -1591,7 +1591,7 @@ function matchesFilters(record) {
     }
   }
 
-  if (f.category && record.category !== f.category) return false;
+  if (f.category && record.category !== f.category && record.topicType !== f.category) return false;
   if (f.sourceType && record.sourceType !== f.sourceType) return false;
   if (f.postType && record.postType !== f.postType) return false;
 
@@ -1709,6 +1709,7 @@ function rebuildCatalogs(serverCatalogs) {
 
   state.records.forEach(record => {
     addCatalogValue(values.categories, record.category);
+    addCatalogValue(values.categories, record.topicType);
     addCatalogValue(values.sourceTypes, record.sourceType);
     addCatalogValue(values.postTypes, record.postType);
   });
@@ -1777,7 +1778,7 @@ function normalizeRecord(input) {
     language: stringOr(input.language),
     postTranslation: stringOr(input.postTranslation),
     copyType: stringOr(input.copyType),
-    topicType: stringOr(input.topicType),
+    topicType: normalizeCatalogValue(input.topicType || input.raw?.[22]),
     imageUrl: stringOr(input.imageUrl),
     rewrite: stringOr(input.rewrite),
     date: stringOr(input.date || input.raw?.[9]),
