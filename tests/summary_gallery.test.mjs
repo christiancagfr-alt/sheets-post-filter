@@ -6,8 +6,14 @@ if (!globalThis.crypto) globalThis.crypto=webcrypto;
 
 class Bucket {
   objects=new Map();
-  async put(key,value,options={}) {this.objects.set(key,{value,options});}
-  async get(key) {const object=this.objects.get(key);return object?{json:async()=>JSON.parse(object.value)}:null;}
+  async put(key,value,options={}) {
+    const old=this.objects.get(key),condition=options.onlyIf;
+    if(condition?.etagMatches && old?.etag!==condition.etagMatches) return null;
+    if(condition instanceof Headers && condition.get('If-None-Match')==='*' && old) return null;
+    const etag=String((old?.version||0)+1);
+    this.objects.set(key,{value,options,etag,version:Number(etag)});return {etag};
+  }
+  async get(key) {const object=this.objects.get(key);return object?{etag:object.etag,json:async()=>JSON.parse(object.value)}:null;}
   async list({prefix='',limit=1000,include=[],cursor}={}) {
     const all=[...this.objects.keys()].filter(key=>key.startsWith(prefix)).sort();
     const start=Number(cursor)||0;
@@ -201,4 +207,50 @@ test('immutable chunk cache saves repeat R2 reads while changed release rules ar
   assert.equal(reads,1);
   stream.metadata={...stream.metadata,delayDays:365};
   assert.equal((await listPage([stream],bucket,{limit:500},now)).assets.length,0);
+});
+
+async function seededStats() {
+  const e=env();
+  await publish(e,{action:'put-chunk',stream:streamA,buildId:build,index:1,assets:[asset('2020-01-01')]});
+  await publish(e,{action:'finalize',stream:streamA,buildId:build,chunkCount:1,totalRows:1,metadata:metadata()});
+  return e;
+}
+const visitor='1'.repeat(32),visitor2='2'.repeat(32),assetId='d'.repeat(32);
+test('downloads and favorites persist, favorites are idempotent and independent per browser',async()=>{
+  const e=await seededStats();
+  const request={id:assetId,client:visitor};
+  assert.equal((await api(e,{...request,action:'download'})).downloads,1);
+  assert.equal((await api(e,{...request,action:'download'})).downloads,2);
+  for(let i=0;i<2;i++) assert.equal((await api(e,{...request,action:'favorite',active:true})).favorites,1);
+  assert.equal((await api(e,{...request,client:visitor2,action:'favorite',active:true})).favorites,2);
+  assert.equal((await api(e,{...request,action:'favorite',active:false})).favorites,1);
+  const stats=(await api(e,{action:'stats'})).stats[assetId];
+  assert.deepEqual(stats,{downloads:2,favorites:1});
+  await publish(e,{action:'finalize',stream:streamA,buildId:build,chunkCount:1,totalRows:1,metadata:metadata()});
+  assert.deepEqual((await api(e,{action:'stats'})).stats[assetId],stats);
+});
+test('concurrent statistic writes retry without losing increments',async()=>{
+  const e=await seededStats();
+  const results=await Promise.all(Array.from({length:6},()=>api(e,{action:'download',id:assetId,client:visitor})));
+  assert.ok(results.every(r=>r.ok));
+  assert.equal((await api(e,{action:'stats'})).stats[assetId].downloads,6);
+});
+test('statistics reject unauthenticated, malformed and unknown asset writes',async()=>{
+  const e=await seededStats();
+  assert.equal((await api(e,{action:'favorite',id:assetId,client:visitor,active:'yes'})).status,400);
+  assert.equal((await api(e,{action:'download',id:'f'.repeat(32),client:visitor})).status,400);
+  e.ACCESS_PASSWORD='private';
+  assert.equal((await api(e,{action:'download',id:assetId,client:visitor})).status,401);
+  assert.equal((await api(e,{action:'stats'})).status,401);
+});
+
+test('the first material page includes persisted statistics before further pages load',async()=>{
+  const e=await seededStats();
+  await api(e,{action:'favorite',id:assetId,client:visitor,active:true});
+  await api(e,{action:'download',id:assetId,client:visitor});
+  const first=await api(e,{action:'list',limit:1});
+  assert.equal(first.ok,true);
+  assert.deepEqual(first.stats[assetId],{downloads:1,favorites:1});
+  const later=await api(e,{action:'list',offset:1});
+  assert.equal(later.stats,undefined);
 });

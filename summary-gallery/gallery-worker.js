@@ -41,7 +41,9 @@ async function boundedJson(request, limit) {
   } finally {reader.releaseLock();}
   const bytes=new Uint8Array(size);let offset=0;
   for(const chunk of chunks) {bytes.set(chunk,offset);offset+=chunk.byteLength;}
-  return size?JSON.parse(new TextDecoder().decode(bytes)):{};
+  if (!size) return {};
+  const text = new TextDecoder().decode(bytes);
+  return JSON.parse(text);
 }
 
 async function equal(a, b) {
@@ -156,7 +158,7 @@ function publicInfo(streams, now = new Date(), clock = requestClock(now)) {
   const cacheKey = 'catalogs-v2|'+(streams.map(stream=>stream.buildId+':'+clock(stream.metadata.timezone)).join('|') || 'empty');
   const order={images:0,kb_videos:1,videos:1,effect_videos:2};
   return {catalogs:[...catalogs.values()].sort((a,b)=>(order[a.id]??9)-(order[b.id]??9)).map(item=>({...item,children:[...item.children].sort()})),
-          assignees:[], cacheMeta:{cacheKey, buildId:cacheKey, total, updatedAt:streams.map(s=>s.updatedAt).sort().at(-1)||''}};
+          assignees:[], cacheMeta:{statistics:true,cacheKey, buildId:cacheKey, total, updatedAt:streams.map(s=>s.updatedAt).sort().at(-1)||''}};
 }
 
 async function signature(value, secret) {
@@ -281,6 +283,60 @@ export async function listPage(streams, bucket, body, now = new Date(), clock = 
   return {assets,hasMore,nextOffset:hasMore?(Number(body.offset)||0)+assets.length:null,nextCursor:hasMore?btoa(JSON.stringify(position)):null};
 }
 
+// Statistics live outside published builds, so republishing never resets them.
+const STATS = 'summary/statistics/';
+function counts(record = {}) {
+  return {downloads: Number(record.downloads || 0), favorites: Object.keys(record.clients || {}).length};
+}
+async function readStats(bucket) {
+  const stats = {}; let cursor;
+  do {
+    const page = await bucket.list({prefix:STATS, cursor, limit:1000, include:['customMetadata']});
+    for (const object of page.objects) {
+      const value = object.customMetadata || {};
+      stats[object.key.slice(STATS.length, -5)] = {downloads:Number(value.downloads || 0),favorites:Number(value.favorites || 0)};
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return stats;
+}
+async function recordStat(bucket, streams, body) {
+  if (!idOK(body.id) || !/^[a-f0-9]{32}$/.test(body.client || '') ||
+      (body.action === 'favorite' && typeof body.active !== 'boolean')) throw new Error('Invalid statistic');
+  // Reject unknown and unreleased assets, even for a logged-in visitor.
+  let found = false;
+  for (const stream of streams) {
+    for (const key of stream.chunks) {
+      const chunk = await readChunk(bucket,key);
+      if ((chunk?.assets || []).some(asset => asset.id === body.id && isReleased(asset,stream.metadata))) {found=true;break;}
+    }
+    if(found) break;
+  }
+  if (!found) throw new Error('Unknown asset');
+  const key = STATS + body.id + '.json';
+  for (let attempt=0; attempt<8; attempt++) {
+    const previous = await bucket.get(key);
+    const record = previous ? await previous.json() : {downloads:0,clients:{}};
+    record.clients ||= {};
+    if(body.action === 'download') record.downloads = Number(record.downloads || 0)+1;
+    else if(body.active) record.clients[body.client]=true;
+    else delete record.clients[body.client];
+    const result=counts(record);
+    // Conditional writes prevent simultaneous visitors overwriting each other.
+    let written;
+    try { written=await bucket.put(key,JSON.stringify(record),{
+      onlyIf:previous?{etagMatches:previous.etag}:new Headers({'If-None-Match':'*'}),
+      customMetadata:{downloads:String(result.downloads),favorites:String(result.favorites)},
+    }); } catch (error) {
+      if (!/429|Too Many Requests/i.test(String(error))) throw error;
+      await new Promise(resolve=>setTimeout(resolve,1100));
+      continue;
+    }
+    if(written) return result;
+  }
+  throw new Error('Statistics busy');
+}
+
 async function gallery(request,env) {
   const body=await boundedJson(request,64*1024);
   if(body.action==='login') {
@@ -290,21 +346,54 @@ async function gallery(request,env) {
     return json({ok:true,token});
   }
   if(!(await authorized(body.token,env))) return json({ok:false,error:'登录已过期，请重新输入访问密码'},401);
-  if(body.action==='stats') return json({ok:true,stats:{},assignees:[]});
+  if(body.action==='stats') return json({ok:true,stats:await readStats(env.GALLERY_CACHE),assignees:[]});
   if(body.action==='refreshStatus') return json({ok:true,status:{state:'idle'}});
   const streams=await manifests(env.GALLERY_CACHE);
+  if(['download','favorite'].includes(body.action)) return json({ok:true,...await recordStat(env.GALLERY_CACHE,streams,body)});
   const now=new Date();
   const clock=requestClock(now);
   const info=publicInfo(streams,now,clock);
   if(['catalogs','cacheMeta'].includes(body.action)) return json({ok:true,...info});
-  if(body.action==='list') return json({ok:true,...info,total:info.cacheMeta.total,...await listPage(streams,env.GALLERY_CACHE,body,now,clock)});
+  if(body.action==='list') {
+    // Send counts with the first page: a large gallery may take minutes to load.
+    // Immutable published chunks contain no live statistics.
+    const stats = !body.cursor && !Number(body.offset) ? await readStats(env.GALLERY_CACHE) : undefined;
+    return json({ok:true,...info,stats,total:info.cacheMeta.total,...await listPage(streams,env.GALLERY_CACHE,body,now,clock)});
+  }
   return json({ok:false,error:'不支持此操作；源表数据请在桌面软件中汇总并发布'},400);
+}
+
+// Analytics uses its own binding; it never reads or writes gallery R2 data.
+const recentVisits = new Map();
+async function recordVisit(request, env, authenticate) {
+  if (!env.GALLERY_ANALYTICS) return new Response(null,{status:204});
+  const origin = new URL(request.url).origin;
+  if (request.method !== 'POST' || request.headers.get('origin') !== origin) return json({ok:false},403);
+  const body = await boundedJson(request,2048);
+  if (!(await authenticate(body))) return json({ok:false},401);
+  const now = Date.now()/1000;
+  if (!/^[a-f0-9]{32}$/.test(body.visitor || '') || !/^[a-f0-9]{32}$/.test(body.session || '') ||
+      !Number.isFinite(body.seconds) || body.seconds<0 || body.seconds>28800 ||
+      !Number.isFinite(body.started) || body.started>now+60 || body.started<now-86400) return json({ok:false},400);
+  // Best-effort isolate deduplication and visitor rate cap, without storage calls.
+  const key = body.visitor;
+  let recent = recentVisits.get(key);
+  if (!recent || now-recent.at>60) recent={at:now,sessions:new Set()};
+  if (recent.sessions.has(body.session)) return new Response(null,{status:204});
+  if (recent.sessions.size>=12) return json({ok:false},429);
+  recent.sessions.add(body.session);
+  if(recentVisits.size>=2048) recentVisits.delete(recentVisits.keys().next().value);
+  recentVisits.set(key,recent);
+  env.GALLERY_ANALYTICS.writeDataPoint({indexes:[new URL(request.url).hostname],
+    blobs:[body.visitor,body.session], doubles:[body.seconds,body.started]});
+  return new Response(null,{status:204,headers:{'Cache-Control':'no-store','X-Robots-Tag':'noindex'}});
 }
 
 export default {
   async fetch(request,env) {
     try {
       const url=new URL(request.url);
+      if(url.pathname==='/api/visit') return await recordVisit(request,env,body=>authorized(body.token,env));
       if(url.pathname==='/api/summary-publish' && request.method==='POST') return await publish(request,env);
       if(url.pathname==='/api/gallery' && request.method==='POST') return await gallery(request,env);
       if(url.pathname.startsWith('/api/')||url.pathname.startsWith('/cdn/')||url.pathname.startsWith('/summary/')) return json({ok:false,error:'Not found'},404);

@@ -78,7 +78,8 @@ function isAllowedUrl(value) {
     ) {
       return true;
     }
-    return host === "example.com" || host.endsWith(".example.com");
+    const configured = [process.env.PUBLIC_CACHE_BASE, process.env.PUBLIC_JSON_CACHE_BASE].filter(Boolean);
+    return configured.some(item => { try { return new URL(item).origin === url.origin; } catch { return false; } });
   } catch (error) {
     return false;
   }

@@ -19,8 +19,8 @@
 
 ## 部署到 Google
 
-1. 打开绑定结果表的脚本项目
-2. 用本目录脚本覆盖对应文件
-3. 重新跑缓存刷新 / `qGalleryExportDriveCacheManifest`
-4. 确认输出 JSON 的每条记录含 `likes`、`designer`
+1. 打开绑定结果表的脚本项目  
+2. 用本目录脚本覆盖对应文件  
+3. 重新跑缓存刷新 / `qGalleryExportDriveCacheManifest`  
+4. 确认输出 JSON 的每条记录含 `likes`、`designer`  
 5. 把 JSON 公共链接填到 Vercel `PUBLIC_JSON_CACHE_URL`

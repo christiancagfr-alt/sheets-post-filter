@@ -25,8 +25,8 @@ class SheetMetricSyncTests(unittest.TestCase):
 
     def test_source_groups_use_independent_configured_rows_and_columns(self):
         rows = [[""] * 17 for _ in range(6)]
-        rows[0][5], rows[1][5] = "TK01", "example_person_a"
-        rows[0][11], rows[1][11] = "TK02", "example_person_b"
+        rows[0][5], rows[1][5] = "TK01", "ces"
+        rows[0][11], rows[1][11] = "TK02", "ana"
         rows[4][0] = "10-22"
         rows[4][5:9] = [100, 5, 200, 6]
         rows[4][11:15] = [300, 7, 400, 8]
@@ -43,12 +43,12 @@ class SheetMetricSyncTests(unittest.TestCase):
         )
         self.assertFalse(conflicts)
         self.assertEqual(stats["source_records"], 2)
-        self.assertEqual(index[("example_person_a", "tk01", "10-22")].values, (100, 5, 200, 6))
-        self.assertEqual(index[("example_person_b", "tk02", "10-22")].values, (300, 7, 400, 8))
+        self.assertEqual(index[("ces", "tk01", "10-22")].values, (100, 5, 200, 6))
+        self.assertEqual(index[("ana", "tk02", "10-22")].values, (300, 7, 400, 8))
 
     def test_target_only_changes_allowed_columns_and_skips_formula(self):
         source_rows = [[""] * 11 for _ in range(6)]
-        source_rows[0][5], source_rows[1][5] = "TK01", "example_person_a"
+        source_rows[0][5], source_rows[1][5] = "TK01", "ces"
         source_rows[4][0] = "2026-10-22"
         source_rows[4][5:9] = [100, 5, 200, 6]
         index, conflicts, _stats = build_source_index(
@@ -65,7 +65,7 @@ class SheetMetricSyncTests(unittest.TestCase):
         target = [[""] * 20 for _ in range(8)]
         formulas = [[""] * 20 for _ in range(8)]
         target[2][11] = "10/22"
-        target[6][0], target[6][1] = "example_person_a", "TK01"
+        target[6][0], target[6][1] = "ces", "TK01"
         target[6][11:19] = [0, 0, 0, 0, "禁止1", "禁止2", "禁止3", "禁止4"]
         formulas[6][12] = "=SUM(A1:A2)"
         changes, stats = plan_target_changes(

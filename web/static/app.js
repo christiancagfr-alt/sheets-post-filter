@@ -9,7 +9,7 @@ const templateNames = {
 };
 
 const scalarFields = {
-  filter: ["credentials_file", "target_url", "hot_target_url", "output_sheet", "hot_output_sheet", "output_start_row", "hot_start_row", "start_date", "end_date", "likes_threshold", "schedule_minutes", "exclude_id_value", "date_field", "sort_field", "cf_publish_url", "cf_publish_secret", "cf_publish_source"],
+  filter: ["credentials_file", "target_url", "hot_target_url", "output_sheet", "hot_output_sheet", "output_start_row", "hot_start_row", "start_date", "end_date", "likes_threshold", "schedule_minutes", "exclude_id_value", "cf_publish_url", "cf_publish_secret", "cf_publish_source", "cf_publish_mode", "filter_source_sheet", "filter_header_row"],
   catalog: ["catalog_index_url", "catalog_index_sheet", "catalog_start_row", "catalog_url_col", "catalog_sheet_col", "catalog_target_url", "catalog_output_sheet", "catalog_output_start_row", "catalog_dedupe_col", "catalog_exclude_sheets", "catalog_date_col", "catalog_start_date", "catalog_end_date"],
   align: ["align_target_url", "align_output_sheet", "align_start_row", "align_source_sheet", "align_header_row", "align_schedule_minutes"],
   video: ["vd_source_url", "vd_source_sheets", "vd_start_row", "vd_col_date", "vd_col_link", "vd_col_name", "vd_col_type", "vd_types", "vd_start_date", "vd_end_date", "vd_type_filter_mode", "vd_dest_url", "vd_report_sheet", "vd_log_sheet", "vd_out_start_row", "vd_count_mode", "vd_unit_seconds", "vd_batch_size", "vd_schedule_minutes"],
@@ -77,7 +77,9 @@ function collectInitialSettings(cfg, template) {
   });
   if (template === "filter") {
     result.sources = cfg.sources || cfg.source_urls || [];
-    result.fields = cfg.fields || [];
+    result.filter_header_mappings = cfg.filter_header_mappings || [];
+    result.filter_source_sheet = cfg.filter_source_sheet || "";
+    result.filter_header_row = cfg.filter_header_row || "1";
   }
   if (template === "align") {
     result.align_sources = cfg.align_sources || [];
@@ -184,30 +186,7 @@ function readSources(containerId) {
 function updateCounts() {
   $("sourceCount").textContent = `${readSources("sourceRows").length} 个链接`;
   $("alignSourceCount").textContent = `${readSources("alignSourceRows").length} 个链接`;
-  $("fieldCount").textContent = `${readFieldMaps().length} 列`;
   $("mappingCount").textContent = `${readMappings().length} 个字段`;
-}
-
-function addFieldRow(item = {}) {
-  const row = document.createElement("div");
-  row.className = "field-row";
-  row.innerHTML = `<input class="f-name" type="text" placeholder="字段名" /><input class="f-sheet" type="text" placeholder="源数据" /><input class="f-range" type="text" placeholder="AB2:AB" /><button class="ghost src-del" type="button">删除</button>`;
-  row.querySelector(".f-name").value = item.name || "";
-  row.querySelector(".f-sheet").value = item.sheet || "源数据";
-  row.querySelector(".f-range").value = item.range || "";
-  row.querySelector("button").addEventListener("click", () => { row.remove(); if (!$("fieldRows").children.length) addFieldRow(); updateCounts(); });
-  $("fieldRows").appendChild(row);
-}
-
-function setFieldMaps(list) {
-  $("fieldRows").innerHTML = "";
-  (Array.isArray(list) && list.length ? list : defaultFields).forEach(addFieldRow);
-  if (!$("fieldRows").children.length) addFieldRow();
-  updateCounts();
-}
-
-function readFieldMaps() {
-  return [...$("fieldRows").querySelectorAll(".field-row")].map((row) => ({ name: row.querySelector(".f-name").value.trim(), sheet: row.querySelector(".f-sheet").value.trim(), range: row.querySelector(".f-range").value.trim() })).filter((item) => item.name && item.range);
 }
 
 function addMappingRow(item = {}) {
@@ -279,7 +258,7 @@ function collectTemplate(template) {
   const data = {};
   (scalarFields[template] || []).forEach((id) => { if ($(id)) data[id] = $(id).value.trim(); });
   (checkFields[template] || []).forEach((id) => { if ($(id)) data[id] = $(id).checked; });
-  if (template === "filter") { data.sources = readSources("sourceRows"); data.source_urls = data.sources.map((source) => source.url); data.fields = readFieldMaps(); }
+  if (template === "filter") { data.sources = readSources("sourceRows"); data.source_urls = data.sources.map((source) => source.url); data.filter_header_mappings = [...$("filterMappings").children].map(row => ({source:row.dataset.source,target:row.querySelector("input").value.trim()})); }
   if (template === "align") { saveCurrentMappingProfile(); data.align_sources = readSources("alignSourceRows"); data.align_mappings = defaultMappings; data.align_headers = defaultMappings.map((item) => item.target); data.align_mapping_profiles = mappingProfiles; }
   if (template === "video" || template === "custom") { data.vd_source_sheets = $("vd_source_sheets").value.split(/\r?\n|，|,/).map((x) => x.trim()).filter(Boolean); data.vd_types = $("vd_types").value.split(/\r?\n|，|,/).map((x) => x.trim()).filter(Boolean); data.vd_columns = readVdColumns(); data.vd_write_log = template === "video"; }
   if (template === "catalog") { data.catalog_exclude_sheets = ($("catalog_exclude_sheets")?.value || "").split(/\r?\n|，|,/).map((x) => x.trim()).filter(Boolean); }
@@ -289,7 +268,10 @@ function collectTemplate(template) {
 function fillTemplate(template, settings) {
   (scalarFields[template] || []).forEach((id) => { if ($(id) && settings[id] !== undefined && settings[id] !== null) $(id).value = Array.isArray(settings[id]) ? settings[id].join("\n") : settings[id]; });
   (checkFields[template] || []).forEach((id) => { if ($(id) && typeof settings[id] === "boolean") $(id).checked = settings[id]; });
-  if (template === "filter") { setSources("sourceRows", settings.sources || settings.source_urls || []); setFieldMaps(settings.fields || defaultFields); }
+  if (template === "filter") { setSources("sourceRows", settings.sources || settings.source_urls || []);
+    $("filter_source_sheet").value = settings.filter_source_sheet || "";
+    $("filter_header_row").value = settings.filter_header_row || "1";
+    fillFilterMappings(settings.filter_header_mappings || []); filterModeChanged(); }
   if (template === "align") {
     setSources("alignSourceRows", settings.align_sources || []);
     defaultMappings = settings.align_mappings || (settings.align_headers || []).map((name) => ({ target: name, source: name }));
@@ -413,14 +395,12 @@ $("addSource").addEventListener("click", () => addSourceRow("sourceRows"));
 $("clearSources").addEventListener("click", () => setSources("sourceRows", []));
 $("addAlignSource").addEventListener("click", () => { addSourceRow("alignSourceRows"); refreshMappingProfileOptions(); });
 $("clearAlignSources").addEventListener("click", () => { setSources("alignSourceRows", []); refreshMappingProfileOptions(); });
-$("addField").addEventListener("click", () => addFieldRow());
-$("resetFields").addEventListener("click", () => setFieldMaps(defaultFields));
 $("addMapping").addEventListener("click", () => addMappingRow());
 $("addVdColumn").addEventListener("click", () => addVdColumnRow());
 $("mappingProfile").addEventListener("change", () => { saveCurrentMappingProfile(); currentMappingKey = $("mappingProfile").value; setMappings(currentMappingKey === "__default__" ? defaultMappings : (mappingProfiles[currentMappingKey] || defaultMappings)); });
 $("peekHeaders").addEventListener("click", peekHeaders);
 document.querySelectorAll(".save-template").forEach((button) => button.addEventListener("click", () => saveConfig(false)));
-$("runBtn").addEventListener("click", () => startJob("/api/run", (p) => !p.sources?.length ? "请至少填写一个源表链接" : (!p.start_date || !p.end_date ? "请填写开始和结束日期" : "")));
+$("runBtn").addEventListener("click", () => startJob("/api/run", (p) => !p.sources?.length ? "请至少填写一个源表链接" : (p.cf_publish_mode !== "direct" && (!p.start_date || !p.end_date) ? "请填写开始和结束日期" : "")));
 $("runCatalogBtn").addEventListener("click", () => startJob("/api/run-catalog", (p) => !p.catalog_index_url ? "请填写目录表链接" : (!p.catalog_target_url ? "请填写目标表链接" : "")));
 $("runAlignBtn").addEventListener("click", () => startJob("/api/run-align", (p) => !p.align_sources?.length ? "请至少填写一个源表链接" : (!p.align_target_url ? "请填写目标表链接" : (!p.align_mappings?.length ? "请添加字段映射" : ""))));
 $("runVideoBtn").addEventListener("click", () => startJob("/api/run-video", (p) => !p.vd_source_url ? "请填写源表链接" : (!p.vd_dest_url ? "请填写目标表链接" : "")));
@@ -438,3 +418,26 @@ $("copySa").addEventListener("click", async () => { try { await navigator.clipbo
 
 loadConfig();
 setInterval(() => { poll().catch(() => {}); }, 800);
+
+function fillFilterMappings(items) {
+  $("filterMappings").replaceChildren();
+  for(const item of items) {
+    const row=document.createElement('label');row.dataset.source=item.source;
+    const source=document.createElement('span');source.textContent=item.source;row.append(source);
+    const input=document.createElement('input');input.setAttribute('aria-label',`${item.source} 的目标字段`);input.value=item.target;row.append(input);$("filterMappings").append(row);
+  }
+}
+function filterModeChanged() {
+  const direct=$("cf_publish_mode").value==='direct';
+  document.querySelectorAll('.filter-merge-only').forEach(el=>el.hidden=direct);
+  $("runBtn").textContent=direct?'直接读取并发布':'开始汇总';
+}
+$("cf_publish_mode").addEventListener('change',filterModeChanged);
+$("peekFilterHeaders").addEventListener('click',async()=>{
+  const button=$("peekFilterHeaders");button.disabled=true;
+  try {
+    const response=await fetch('/api/peek-filter-headers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(fullPayload())});
+    const data=await response.json();if(!data.ok)throw Error(data.error);fillFilterMappings(data.mappings);
+    const item=activeMenu();if(item){item.settings=collectTemplate(item.template);await saveConfig(true);}
+  } catch(error) {showMessage(error.message,true);} finally {button.disabled=false;}
+});

@@ -99,7 +99,8 @@ async function boundedJson(request, limit) {
   } finally {reader.releaseLock();}
   const bytes=new Uint8Array(size);let offset=0;
   for(const chunk of chunks) {bytes.set(chunk,offset);offset+=chunk.byteLength;}
-  return size?JSON.parse(new TextDecoder().decode(bytes)):{};
+  if (!size) return {};
+  return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 async function handlePublish(request, env) {
@@ -358,9 +359,132 @@ async function handleDriveImage(request) {
   return new Response("Drive image unavailable", { status: 404 });
 }
 
-export default {
+async function handleAvatar(request, env) {
+  if (!(await isAuthenticated(request, env))) return json({ ok: false, error: "需要访问密码" }, 401);
+  const url = new URL(request.url);
+  const token = String(env.FB_GRAPH_ACCESS_TOKEN || env.FACEBOOK_ACCESS_TOKEN || "").trim();
+  if (url.searchParams.get("check") === "1") {
+    return json({
+      ok: true,
+      authenticated: true,
+      tokenConfigured: Boolean(token),
+      hint: token ? "头像密钥已配置。" : "当前 Cloudflare Pages 项目尚未配置 FB_GRAPH_ACCESS_TOKEN。",
+    });
+  }
+
+  const rawId = String(url.searchParams.get("id") || "").trim();
+  const id = /^\d{8,}$/.test(rawId) ? rawId : "";
+  const width = Math.max(40, Math.min(320, Math.round(Number(url.searchParams.get("w") || 120) || 120)));
+  let target;
+  if (id) {
+    target = new URL(`https://graph.facebook.com/${encodeURIComponent(id)}/picture`);
+    target.searchParams.set("width", String(width));
+    target.searchParams.set("height", String(width));
+    if (token) target.searchParams.set("access_token", token);
+  } else {
+    try {
+      target = new URL(String(url.searchParams.get("url") || ""));
+    } catch {
+      return new Response("Missing or invalid avatar id/url", { status: 400 });
+    }
+    const host = target.hostname.toLowerCase();
+    if (target.protocol !== "https:" || !(
+      host === "graph.facebook.com" || host.endsWith(".facebook.com") ||
+      host.endsWith(".fbcdn.net") || host.endsWith(".fbsbx.com")
+    )) return new Response("Invalid avatar URL", { status: 400 });
+    if (host === "graph.facebook.com" && /\/picture/i.test(target.pathname) && token) {
+      target.searchParams.set("access_token", token);
+    }
+  }
+
+  try {
+    let imageUrl = target;
+    if (target.hostname === "graph.facebook.com" && /\/picture/i.test(target.pathname)) {
+      const metaUrl = new URL(target);
+      metaUrl.searchParams.set("redirect", "false");
+      const metaController = new AbortController();
+      const metaTimer = setTimeout(() => metaController.abort(), 8000);
+      const metaRes = await fetch(metaUrl, {
+        signal: metaController.signal,
+        headers: { Accept: "application/json,image/*,*/*;q=0.8", "User-Agent": "q-gallery-avatar/1.0" },
+      });
+      clearTimeout(metaTimer);
+      if (!metaRes.ok) return new Response(`Facebook returned HTTP ${metaRes.status}`, { status: 502 });
+      const metaType = String(metaRes.headers.get("content-type") || "").toLowerCase();
+      if (metaType.includes("json")) {
+        const meta = await metaRes.json().catch(() => null);
+        const data = meta && meta.data ? meta.data : meta;
+        if (data && data.is_silhouette) return new Response("Facebook returned a default avatar", { status: 404 });
+        if (data && data.url) imageUrl = new URL(data.url);
+      } else if (metaType.startsWith("image/")) {
+        return avatarImageResponse(metaRes, token);
+      }
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    const imageRes = await fetch(imageUrl, {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: { Accept: "image/*,*/*;q=0.8", "User-Agent": "q-gallery-avatar/1.0" },
+    });
+    clearTimeout(timer);
+    if (!imageRes.ok) return new Response(`Facebook returned HTTP ${imageRes.status}`, { status: 502 });
+    const type = String(imageRes.headers.get("content-type") || "").toLowerCase();
+    if (!type.startsWith("image/")) return new Response("Facebook did not return an image", { status: 502 });
+    return avatarImageResponse(imageRes, token);
+  } catch (cause) {
+    return new Response(String(cause && cause.message || "Avatar request failed"), { status: 502 });
+  }
+}
+
+async function avatarImageResponse(upstream, token) {
+  const bytes = await upstream.arrayBuffer();
+  if (!bytes.byteLength || bytes.byteLength > 2 * 1024 * 1024) {
+    return new Response("Empty or oversized avatar image", { status: 502 });
+  }
+  if (bytes.byteLength < 800) return new Response("Facebook returned a tiny placeholder", { status: 404 });
+  return new Response(bytes, {
+    status: 200,
+    headers: {
+      "Content-Type": upstream.headers.get("content-type") || "image/jpeg",
+      "Cache-Control": token ? "public, max-age=604800, stale-while-revalidate=86400" : "public, max-age=600",
+      "X-Content-Type-Options": "nosniff",
+      "X-Avatar-Token": token ? "1" : "0",
+    },
+  });
+}
+
+// Analytics uses its own binding; it never reads or writes gallery R2 data.
+const recentVisits = new Map();
+async function recordVisit(request, env, authenticate) {
+  if (!env.GALLERY_ANALYTICS) return new Response(null,{status:204});
+  const origin = new URL(request.url).origin;
+  if (request.method !== 'POST' || request.headers.get('origin') !== origin) return json({ok:false},403);
+  const body = await boundedJson(request,2048);
+  if (!(await authenticate(body))) return json({ok:false},401);
+  const now = Date.now()/1000;
+  if (!/^[a-f0-9]{32}$/.test(body.visitor || '') || !/^[a-f0-9]{32}$/.test(body.session || '') ||
+      !Number.isFinite(body.seconds) || body.seconds<0 || body.seconds>28800 ||
+      !Number.isFinite(body.started) || body.started>now+60 || body.started<now-86400) return json({ok:false},400);
+  // Best-effort isolate deduplication and visitor rate cap, without storage calls.
+  const key = body.visitor;
+  let recent = recentVisits.get(key);
+  if (!recent || now-recent.at>60) recent={at:now,sessions:new Set()};
+  if (recent.sessions.has(body.session)) return new Response(null,{status:204});
+  if (recent.sessions.size>=12) return json({ok:false},429);
+  recent.sessions.add(body.session);
+  if(recentVisits.size>=2048) recentVisits.delete(recentVisits.keys().next().value);
+  recentVisits.set(key,recent);
+  env.GALLERY_ANALYTICS.writeDataPoint({indexes:[new URL(request.url).hostname],
+    blobs:[body.visitor,body.session], doubles:[body.seconds,body.started]});
+  return new Response(null,{status:204,headers:{'Cache-Control':'no-store','X-Robots-Tag':'noindex'}});
+}
+
+const galleryWorker = {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if(url.pathname==='/api/visit') return await recordVisit(request,env,()=>isAuthenticated(request,env));
     if (request.method === "OPTIONS") {
       if (url.pathname === "/api/publish-cache") {
         return new Response(null, { status: 204 });
@@ -391,6 +515,9 @@ export default {
     if (url.pathname === "/api/auth") {
       return handleAuth(request, env);
     }
+    if (url.pathname === "/api/avatar" && request.method === "GET") {
+      return handleAvatar(request, env);
+    }
     if (url.pathname === "/api/drive-image" && request.method === "GET") {
       if (!(await isAuthenticated(request, env))) return json({ok:false,error:'需要访问密码'},401);
       const result = await handleDriveImage(request);
@@ -404,5 +531,17 @@ export default {
     if (!headers.has("X-Frame-Options")) headers.set("X-Frame-Options", "DENY");
     if (!headers.has("X-Content-Type-Options")) headers.set("X-Content-Type-Options", "nosniff");
     return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
+  },
+};
+
+
+export default {
+  async fetch(request,env) {
+    let response;
+    try { response = await galleryWorker.fetch(request,env); }
+    catch { response = json({ok:false,error:'服务暂时不可用'},500); }
+    const headers = new Headers(response.headers);
+    headers.set('X-Robots-Tag','noindex, nofollow, noarchive, nosnippet, noimageindex');
+    return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
   },
 };

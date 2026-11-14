@@ -1,31 +1,4 @@
-# 禁止所有搜索引擎与爬虫收录本站
+# Allow crawlers to read page noindex directives. Data endpoints are excluded.
 User-agent: *
-Disallow: /
-
-# 常见搜索引擎（显式再写一遍）
-User-agent: Googlebot
-Disallow: /
-
-User-agent: Googlebot-Image
-Disallow: /
-
-User-agent: Bingbot
-Disallow: /
-
-User-agent: Baiduspider
-Disallow: /
-
-User-agent: Sogou
-Disallow: /
-
-User-agent: 360Spider
-Disallow: /
-
-User-agent: Yandex
-Disallow: /
-
-User-agent: DuckDuckBot
-Disallow: /
-
-# 无站点地图
-Sitemap:
+Disallow: /api/
+Disallow: /cdn/

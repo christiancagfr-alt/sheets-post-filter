@@ -50,7 +50,7 @@ class MetricSnapshotTests(unittest.TestCase):
 
     def test_one_snapshot_supplies_headers_dates_and_literal_metric_text(self):
         values = [[''] * 10 for _ in range(7)]
-        values[0][5], values[1][5] = 'TK01', 'example_person_a'
+        values[0][5], values[1][5] = 'TK01', 'ces'
         values[4][0] = 46317
         values[4][5:9] = [1234.5, 0, 3, 4]
         display = [list(row) for row in values]
@@ -75,4 +75,4 @@ class MetricSnapshotTests(unittest.TestCase):
             metric_count=4, date_mode='month_day',
         )
         self.assertFalse(conflicts)
-        self.assertEqual(index[('example_person_a', 'tk01', '10-22')].values, ('1,234.50', '000', '3', '4'))
+        self.assertEqual(index[('ces', 'tk01', '10-22')].values, ('1,234.50', '000', '3', '4'))

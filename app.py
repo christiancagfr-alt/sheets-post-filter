@@ -400,7 +400,7 @@ def _cfg_from_payload(data: dict, base: Config | None = None) -> Config:
             setattr(cfg, key, data[key])
     if 'wm_publish_after_sync' in data:
         cfg.wm_publish_after_sync = bool(data['wm_publish_after_sync'])
-    for key in ("wm_columns", "wm_direct_columns", "wm_exclude_sheets", "wm_gallery_exclude_categories", "ui_archived_menus", "wm_source_urls", "wm_channels"):
+    for key in ("filter_header_mappings", "wm_columns", "wm_direct_columns", "wm_exclude_sheets", "wm_gallery_exclude_categories", "ui_archived_menus", "wm_source_urls", "wm_channels"):
         if key in data and isinstance(data[key], list):
             setattr(cfg, key, copy.deepcopy(data[key]))
     if 'wm_active_channel' in data:
@@ -426,6 +426,13 @@ def _cfg_from_payload(data: dict, base: Config | None = None) -> Config:
         "cf_publish_url": "cf_publish_url",
         "cf_publish_secret": "cf_publish_secret",
         "cf_publish_source": "cf_publish_source",
+        "cf_publish_mode": "cf_publish_mode",
+        "filter_source_sheet": "filter_source_sheet",
+        "filter_header_row": "filter_header_row",
+        "cf_direct_url": "cf_direct_url",
+        "cf_direct_sheet": "cf_direct_sheet",
+        "cf_direct_header_row": "cf_direct_header_row",
+
         "vd_source_url": "vd_source_url",
         "vd_source_sheet": "vd_source_sheet",
         "vd_col_date": "vd_col_date",
@@ -756,7 +763,7 @@ def _run_job(cfg: Config, from_schedule: bool = False, job_key: str = "default")
         )
         job["result"] = result
     except Exception as e:
-        _record_job_failure(e, "筛选汇总", job)
+        _record_job_failure(e, "直接发布" if cfg.cf_publish_mode == "direct" else "筛选汇总", job)
     finally:
         job["running"] = False
         job["finished_at"] = datetime.now().strftime("%H:%M:%S")
@@ -1374,6 +1381,14 @@ def api_config():
                 "cf_publish_secret": redacted["cf_publish_secret"],
                 "cf_publish_after_sync": cfg.cf_publish_after_sync,
                 "cf_publish_source": cfg.cf_publish_source,
+                "cf_publish_mode": cfg.cf_publish_mode,
+                "filter_source_sheet": cfg.filter_source_sheet,
+                "filter_header_row": cfg.filter_header_row,
+                "cf_direct_url": cfg.cf_direct_url,
+                "cf_direct_sheet": cfg.cf_direct_sheet,
+                "cf_direct_header_row": cfg.cf_direct_header_row,
+                "filter_header_mappings": cfg.filter_header_mappings,
+
             },
             "service_account_email": email,
             "credentials_ok": cred_ok,
@@ -1400,40 +1415,10 @@ def start_publish_job(cfg: Config) -> str | None:
 
     def _run_publish():
         try:
-            from publish_cloudflare import (
-                overlay_formula_urls,
-                publish_assets_to_cloudflare,
-                split_sheet_for_publish,
-            )
-
-            gc = authorize_cfg(cfg)
-            src = str(cfg.cf_publish_source or "all").strip().lower()
-            if src == "hot":
-                url = cfg.hot_target_url or cfg.target_url
-                sheet = cfg.hot_output_sheet or "高亮结果"
-                start = int(cfg.hot_start_row or 1)
-                include_headers = bool(cfg.hot_include_headers)
-            else:
-                url = cfg.target_url
-                sheet = cfg.output_sheet
-                start = int(cfg.output_start_row or 1)
-                include_headers = bool(cfg.include_headers)
-            if not url:
-                raise RuntimeError("请先填写要发布的目标表链接")
+            from publish_cloudflare import publish_configured_sheet
             job_log = lambda message: _log(message, job)
-            ss = open_by_url_or_id(gc, url, log=job_log)
-            ws = ss.worksheet(sheet)
-            values = read_sheet_values(ws, log=job_log)
-            headers, rows, how, data_start = split_sheet_for_publish(
-                values, start, include_headers
-            )
-            job_log(
-                f"从「{ss.title}」/{sheet} 读取 {len(rows)} 行（{how}），开始发布 Cloudflare"
-            )
-            overlay_formula_urls(ws, rows, data_start, log=job_log)
-            result = publish_assets_to_cloudflare(
-                cfg, headers, rows, None, log=job_log, start_row=data_start
-            )
+            gc = authorize_cfg(cfg)
+            result = publish_configured_sheet(cfg, gc, log=job_log)
             job["result"] = {"ok": True, "mode": "cloudflare", **result}
         except Exception as e:
             _record_job_failure(e, "发布", job)
@@ -1756,14 +1741,15 @@ def api_run():
     cfg = _cfg_from_payload(data)
     if not parse_url_list(cfg.source_urls) and not cfg.sources:
         return jsonify({"ok": False, "error": "请至少填写一个数据源表格链接"}), 400
-    if not cfg.start_date or not cfg.end_date:
-        return jsonify({"ok": False, "error": "请填写开始和结束日期"}), 400
-    if not cfg.write_all and not cfg.write_hot:
-        return jsonify({"ok": False, "error": "请至少勾选：写入全部，或写入高赞"}), 400
-    if cfg.write_all and not cfg.target_url:
-        return jsonify({"ok": False, "error": "请填写「全部结果」目标表链接"}), 400
-    if cfg.write_hot and not (cfg.hot_target_url or cfg.target_url):
-        return jsonify({"ok": False, "error": "请填写高赞目标表链接（可与全部结果同一张表）"}), 400
+    if cfg.cf_publish_mode != 'direct':
+        if not cfg.start_date or not cfg.end_date:
+            return jsonify({"ok": False, "error": "请填写开始和结束日期"}), 400
+        if not cfg.write_all and not cfg.write_hot:
+            return jsonify({"ok": False, "error": "请至少勾选：写入全部，或写入高赞"}), 400
+        if cfg.write_all and not cfg.target_url:
+            return jsonify({"ok": False, "error": "请填写「全部结果」目标表链接"}), 400
+        if cfg.write_hot and not (cfg.hot_target_url or cfg.target_url):
+            return jsonify({"ok": False, "error": "请填写高赞目标表链接（可与全部结果同一张表）"}), 400
     err = start_filter_job(cfg, from_schedule=False)
     if err:
         return jsonify({"ok": False, "error": err}), 409
@@ -1807,6 +1793,16 @@ def api_run_align():
     if err:
         return jsonify({"ok": False, "error": err}), 409
     return jsonify({"ok": True})
+
+
+@app.post("/api/peek-filter-headers")
+def api_peek_filter_headers():
+    try:
+        from publish_cloudflare import peek_filter_headers
+        cfg = _cfg_from_payload(request.get_json(force=True) or {})
+        return jsonify({'ok': True, 'mappings': peek_filter_headers(cfg)})
+    except Exception as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 400
 
 
 @app.post("/api/peek-headers")

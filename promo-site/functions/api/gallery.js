@@ -10,7 +10,9 @@ export async function onRequest(context) {
     return json({ ok: false, error: "需要访问密码。" }, 401);
   }
 
-  const scriptUrl = String(env.APPS_SCRIPT_URL || "").trim();
+  const scriptUrl = String(
+    env.APPS_SCRIPT_URL || ""
+  ).trim();
   if (!scriptUrl) {
     return json({ ok: false, error: "APPS_SCRIPT_URL is not configured." }, 500);
   }

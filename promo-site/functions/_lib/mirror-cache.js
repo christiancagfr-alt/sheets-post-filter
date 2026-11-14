@@ -7,7 +7,7 @@ import {safeUpstreamFetch} from "./safe-upstream.js";
 export const CHUNK_PREFIX = "promo/chunks/";
 export const LAST_REFRESH_KEY = "promo/last-refresh.json";
 
-function isAllowedFetchHost(hostname) {
+function isAllowedFetchHost(hostname, env = {}) {
   const host = String(hostname || "").toLowerCase();
   if (
     host === "drive.google.com" ||
@@ -17,19 +17,20 @@ function isAllowedFetchHost(hostname) {
   ) {
     return true;
   }
-  return host === "example.com" || host.endsWith(".example.com");
+  return [env.PUBLIC_CACHE_BASE, env.PUBLIC_JSON_CACHE_BASE, env.DRIVE_CACHE_MANIFEST_URL]
+    .some((value) => { try { return new URL(value).hostname.toLowerCase() === host; } catch { return false; } });
 }
 
-export function isAllowedFetchUrl(value) {
+export function isAllowedFetchUrl(value, env = {}) {
   try {
     const url = new URL(String(value || "").trim());
-    return url.protocol === "https:" && isAllowedFetchHost(url.hostname);
+    return url.protocol === "https:" && isAllowedFetchHost(url.hostname, env);
   } catch {
     return false;
   }
 }
 
-export function normalizeDriveUrl(url) {
+export function normalizeDriveUrl(url, env = {}) {
   const text = String(url || "").trim();
   if (!text) return "";
   const idMatch = text.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || text.match(/[?&]id=([a-zA-Z0-9_-]+)/);
@@ -39,22 +40,20 @@ export function normalizeDriveUrl(url) {
       encodeURIComponent(idMatch[1])
     );
   }
-  if (/drive\.google\.com/i.test(text) && !/[?&]confirm=/i.test(text) && isAllowedFetchUrl(text)) {
+  if (/drive\.google\.com/i.test(text) && !/[?&]confirm=/i.test(text) && isAllowedFetchUrl(text, env)) {
     return text + (text.includes("?") ? "&" : "?") + "confirm=t";
   }
-  return isAllowedFetchUrl(text) ? text : "";
+  return isAllowedFetchUrl(text, env) ? text : "";
 }
 
 export function publicBase(env) {
-  return String(
-    env.PUBLIC_CACHE_BASE ||
-      env.PUBLIC_JSON_CACHE_BASE ||
-      "https://gallery-cache.example.com"
-  ).replace(/\/$/, "");
+  const value = String(env.PUBLIC_CACHE_BASE || env.PUBLIC_JSON_CACHE_BASE || "").trim();
+  if (!value) throw new Error("PUBLIC_CACHE_BASE is not configured");
+  return value.replace(/\/$/, "");
 }
 
 export function defaultManifestUrl(env) {
-  return normalizeDriveUrl(env.DRIVE_CACHE_MANIFEST_URL || "");
+  return normalizeDriveUrl(env.DRIVE_CACHE_MANIFEST_URL || "", env);
 }
 
 async function fetchText(url, env) {
@@ -80,8 +79,8 @@ export async function mirrorManifestToR2(env, manifestUrlInput) {
     throw err;
   }
 
-  const manifestUrl = normalizeDriveUrl(manifestUrlInput || defaultManifestUrl(env));
-  if (!manifestUrl || !isAllowedFetchUrl(manifestUrl)) {
+  const manifestUrl = normalizeDriveUrl(manifestUrlInput || defaultManifestUrl(env), env);
+  if (!manifestUrl || !isAllowedFetchUrl(manifestUrl, env)) {
     const err = new Error("Missing or disallowed manifestUrl / DRIVE_CACHE_MANIFEST_URL");
     err.code = "NO_MANIFEST";
     throw err;
@@ -100,11 +99,11 @@ export async function mirrorManifestToR2(env, manifestUrlInput) {
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
     const src =
-      normalizeDriveUrl(chunk.url) ||
+      normalizeDriveUrl(chunk.url, env) ||
       (chunk.fileId
         ? `https://drive.google.com/uc?export=download&confirm=t&id=${encodeURIComponent(chunk.fileId)}`
         : "");
-    if (!src || !isAllowedFetchUrl(src)) throw new Error(`Chunk ${i + 1} missing or disallowed url/fileId`);
+    if (!src || !isAllowedFetchUrl(src, env)) throw new Error(`Chunk ${i + 1} missing or disallowed url/fileId`);
 
     const text = await fetchText(src, env);
     const data = JSON.parse(text);

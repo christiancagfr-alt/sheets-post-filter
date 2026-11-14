@@ -40,3 +40,29 @@ test('legacy sessions have a signed server-side expiry and reject old static coo
   const old=await auth.sign(env.ACCESS_PASSWORD,env);
   assert.equal(await auth.isAuthenticated(new Request('https://gallery.example.com',{headers:{cookie:'q_gallery_auth='+old}}),env),false);
 });
+
+test('every promo response excludes indexing including pages, APIs, errors and media',async()=>{
+  for(const [path,method] of [['/','GET'],['/robots.txt','GET'],['/api/auth','GET'],['/api/publish-cache','POST'],['/api/publish-cache','OPTIONS'],['/cdn/promo/manifest.json','GET'],['/api/drive-image?id=example','GET']]) {
+    const response=await worker.fetch(new Request('https://gallery.example.com'+path,{method}),env);
+    assert.match(response.headers.get('X-Robots-Tag')||'',/noindex/);
+  }
+  const broken={...env,ASSETS:{fetch:async()=>{throw new Error('example');}}};
+  const failed=await worker.fetch(new Request('https://gallery.example.com/'),broken);
+  assert.equal(failed.status,500);assert.match(failed.headers.get('X-Robots-Tag'),/noindex/);
+});
+
+test('both site templates expose noindex to crawlers without a site-wide crawl block',async()=>{
+  for(const folder of ['promo-site','summary-gallery']) {
+    const robots=await fs.readFile(new URL('../'+folder+'/robots.txt',import.meta.url),'utf8');
+    assert.doesNotMatch(robots,/^Disallow:\s*\/\s*$/m);
+    const html=await fs.readFile(new URL('../'+folder+'/index.html',import.meta.url),'utf8');
+    assert.match(html,/<meta name="robots" content="noindex/);
+  }
+});
+
+test('deployment routes send private gallery data through the password-checking Worker',async()=>{
+  const routes=JSON.parse(await fs.readFile(new URL('../promo-site/_routes.json',import.meta.url),'utf8'));
+  assert.ok(routes.include.includes('/api/*'));
+  assert.ok(routes.include.includes('/cdn/*'));
+  assert.deepEqual(routes.exclude,[]);
+});

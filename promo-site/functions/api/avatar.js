@@ -28,6 +28,16 @@ export async function onRequestGet(context) {
   const remoteUrlParam = String(reqUrl.searchParams.get("url") || "").trim();
 
   const serverToken = await resolveFbAccessToken(env);
+  if (reqUrl.searchParams.get("check") === "1") {
+    return json({
+      ok: true,
+      authenticated: true,
+      tokenConfigured: Boolean(serverToken),
+      hint: serverToken
+        ? "头像密钥已配置；如果仍无头像，请检查该行的 C 列专页 ID 和 /api/avatar?id=… 请求状态。"
+        : "缺少 FB_GRAPH_ACCESS_TOKEN。请在 Cloudflare Pages → Settings → Variables and Secrets → Production 添加加密密钥并部署。",
+    });
+  }
 
   let target = "";
   const authorId = idRaw.replace(/[^\d]/g, "");

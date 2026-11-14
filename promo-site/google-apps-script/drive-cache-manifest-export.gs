@@ -12,11 +12,11 @@
  *   当前行/总行/剩余行/百分比、有效条数、分片数、maxDate、
  *   本批读了哪几行、是否写分片、完成后 CDN 推送结果
  *
- * 列映射: J=点赞, AB=美工, W=图片, T=头像, R=作者ID
+ * 按工作表表头读取；当前表头 H=头像、C=专页ID，令牌只配置在 Cloudflare Pages Secret。
  */
 
 const Q_GALLERY_DRIVE_EXPORT = {
-  folderId: "EXAMPLE_IDENTIFIER_0020",
+  folderId: "example-folder-id",
   dataSheetName: "图片分析",
   manifestFileName: "q-gallery-cache-manifest.json",
   checkpointFileName: "q-gallery-export-checkpoint.json",
@@ -41,7 +41,7 @@ const Q_GALLERY_DRIVE_EXPORT = {
   // 智能找真实末行：在 A/C/H/J 列从下往上探，比 getLastRow 准且快
   useSmartLastRow: true,
 
-  promoPublishUrl: "https://promo.example.com/api/publish-cache",
+  promoPublishUrl: "",
   promoPublishSecret: "",
   // 兼容旧配置：仅当 fullRefreshEveryHours 未启用时用「每天几点」
   dailyHour: 3,
@@ -402,7 +402,7 @@ function qGalleryExportTickLocked_(opt) {
     if (Q_GALLERY_DRIVE_EXPORT.useSmartLastRow !== false) {
       try {
         const smartEnd = findQGalleryDataLastRow_(sheet);
-        if (smartEnd >= Number(Q_GALLERY_DRIVE_EXPORT.startRow || 3) && smartEnd < state.sheetLastRow) {
+        if (smartEnd >= Number(state.dataStartRow || Q_GALLERY_DRIVE_EXPORT.startRow || 3) && smartEnd < state.sheetLastRow) {
           Logger.log(
             "收紧扫描末行: " + state.sheetLastRow + " → " + smartEnd + "（跳过空白尾部，加速）"
           );
@@ -469,8 +469,7 @@ function qGalleryExportTickLocked_(opt) {
         sheet,
         state.nextRow,
         batchSize,
-        state.lastColumn,
-        state.avatarAccessToken
+        state.lastColumn
       );
       batchesThisRun += 1;
       assetsThisRun += batchAssets.length;
@@ -582,7 +581,7 @@ function qGalleryExportTickLocked_(opt) {
     let published = null;
     if (state.publishAfter) {
       Logger.log("开始推送 CDN /api/publish-cache …");
-      published = publishQGalleryManifestToCdn_(result.manifestUrl, state.avatarAccessToken);
+      published = publishQGalleryManifestToCdn_(result.manifestUrl);
       logExportProgress_("CDN 推送结束", state, {
         action: "publish-cache",
         result: published && published.ok
@@ -633,7 +632,7 @@ function qGalleryExportTickLocked_(opt) {
     });
     Logger.log("Manifest URL: " + result.manifestUrl);
     Logger.log(
-      "网站检查: https://gallery-cache.example.com/promo/manifest.json （看 buildId / maxDate / totalRows）"
+      "网站检查: <SITE_HOST>/cdn/promo/manifest.json （看 buildId / maxDate / totalRows）"
     );
 
     if (state.showUi || opt.showUi) {
@@ -753,6 +752,7 @@ function ensureQGalleryAutoWorkerTrigger_() {
 }
 
 function createQGalleryExportState_(sheet, opt) {
+  const dataStartRow = getQGalleryDataStartRow_(sheet);
   const sheetLastRowRaw = sheet.getLastRow();
   let dataLastRow = sheetLastRowRaw;
   if (Q_GALLERY_DRIVE_EXPORT.useSmartLastRow !== false) {
@@ -763,7 +763,7 @@ function createQGalleryExportState_(sheet, opt) {
     }
   }
   // 至少扫到 startRow；智能末行失败时回退 getLastRow
-  if (dataLastRow < Number(Q_GALLERY_DRIVE_EXPORT.startRow || 3)) {
+  if (dataLastRow < dataStartRow) {
     dataLastRow = sheetLastRowRaw;
   }
   // 略留余量，防止末尾几行漏掉
@@ -780,19 +780,18 @@ function createQGalleryExportState_(sheet, opt) {
   );
 
   const lastColumn = Math.max(sheet.getLastColumn(), 28);
-  const avatarAccessToken = getQGalleryAvatarAccessToken_(sheet) || "";
   return {
     status: "running",
     buildId: Utilities.getUuid(),
     startedAt: Date.now(),
     touchedAt: Date.now(),
     updatedAt: new Date().toISOString(),
-    nextRow: Number(Q_GALLERY_DRIVE_EXPORT.startRow || 3),
+    nextRow: dataStartRow,
+    dataStartRow: dataStartRow,
     sheetLastRow: dataLastRow,
     sheetLastRowRaw: sheetLastRowRaw,
     lastColumn: lastColumn,
     sourceLastRow: sheetLastRowRaw,
-    avatarAccessToken: avatarAccessToken,
     bufferCount: 0,
     consecutiveEmptyBatches: 0,
     nextChunkIndex: 1,
@@ -815,7 +814,7 @@ function createQGalleryExportState_(sheet, opt) {
  * 避免 getLastRow() 因格式/公式把空白算进去导致扫 3 万空行。
  */
 function findQGalleryDataLastRow_(sheet) {
-  const start = Number(Q_GALLERY_DRIVE_EXPORT.startRow || 3);
+  const start = getQGalleryDataStartRow_(sheet);
   const maxRow = sheet.getLastRow();
   if (maxRow < start) return start - 1;
 
@@ -944,12 +943,12 @@ function finalizeQGalleryExport_(folder, state) {
   };
 }
 
-function publishQGalleryManifestToCdn_(manifestUrl, fbAccessToken) {
+function publishQGalleryManifestToCdn_(manifestUrl) {
   const props = PropertiesService.getScriptProperties();
   const publishUrl =
     props.getProperty("PROMO_PUBLISH_URL") ||
     Q_GALLERY_DRIVE_EXPORT.promoPublishUrl ||
-    "https://promo.example.com/api/publish-cache";
+    "";
   const secret =
     props.getProperty("PROMO_PUBLISH_SECRET") ||
     Q_GALLERY_DRIVE_EXPORT.promoPublishSecret ||
@@ -961,7 +960,6 @@ function publishQGalleryManifestToCdn_(manifestUrl, fbAccessToken) {
   }
 
   const payload = { manifestUrl: manifestUrl };
-  if (fbAccessToken) payload.fbAccessToken = fbAccessToken;
 
   const response = UrlFetchApp.fetch(publishUrl, {
     method: "post",
@@ -1129,167 +1127,127 @@ function trashQGalleryNamedFile_(folder, name) {
  * 读取 [startRow, startRow+numRows) → assets
  * 加速：整表 display 一次；公式/Value 只读 C/E/T/W（不再整表 getFormulas）
  */
-function readQGalleryAssetRowsBatch_(sheet, startRow, numRows, lastColumn, avatarAccessToken) {
+function readQGalleryAssetRowsBatch_(sheet, startRow, numRows, lastColumn) {
   if (numRows <= 0) return [];
   const cols = Math.max(Number(lastColumn) || 28, 28);
-
-  // 1) 显示值（主数据）
+  const headers = getQGallerySourceHeaderMap_(sheet, cols);
+  const col = function(name, fallback, aliases) { return getQGalleryColumnIndex_(headers, name, fallback, aliases); };
   const displayValues = sheet.getRange(startRow, 1, numRows, cols).getDisplayValues();
-
-  // 2) 仅关键列公式（IMAGE/HYPERLINK）— 比 28 列全量公式快很多
-  // C=3 链接, E=5 缩略图, T=20 头像, W=23 名图
-  const fC = sheet.getRange(startRow, 3, numRows, 1).getFormulas();
-  const fE = sheet.getRange(startRow, 5, numRows, 1).getFormulas();
-  const fT = sheet.getRange(startRow, 20, numRows, 1).getFormulas();
-  const fW = sheet.getRange(startRow, 23, numRows, 1).getFormulas();
-  const vE = sheet.getRange(startRow, 5, numRows, 1).getValues();
-  const vT = sheet.getRange(startRow, 20, numRows, 1).getValues();
-  const vW = sheet.getRange(startRow, 23, numRows, 1).getValues();
-  const dW = sheet.getRange(startRow, 23, numRows, 1).getDisplayValues();
-
+  const formulaCols = {}, valueCols = {}, displayCols = {};
+  const readColumn = function(index, kind) {
+    const key = String(index);
+    const cache = kind === "formula" ? formulaCols : kind === "value" ? valueCols : displayCols;
+    if (!cache[key]) cache[key] = sheet.getRange(startRow, index + 1, numRows, 1)[kind === "formula" ? "getFormulas" : kind === "value" ? "getValues" : "getDisplayValues"]();
+    return cache[key];
+  };
+  const postLinkCol = col("帖文链接", 2), avatarCol = col("头像", 19);
+  const imageCol = col("图片链接", 4, ["缩略图"]), thumbnailCol = col("缩略图", 22, ["图片链接"]);
+  const dateCol = col("发帖日期", 7, ["日期"]);
+  const waterTimeCol = col("交教会时间", Object.keys(headers).length ? -1 : 26, ["水滴时间", "水滴日期", "交教会日期"]);
+  const avatarFormulas = readColumn(avatarCol, "formula"), avatarValues = readColumn(avatarCol, "value");
+  const postLinkFormulas = readColumn(postLinkCol, "formula");
+  const imageFormulas = readColumn(imageCol, "formula"), imageValues = readColumn(imageCol, "value");
+  const thumbnailFormulas = readColumn(thumbnailCol, "formula"), thumbnailValues = readColumn(thumbnailCol, "value");
+  const thumbnailDisplays = readColumn(thumbnailCol, "display");
   const assets = [];
   for (let offset = 0; offset < displayValues.length; offset += 1) {
     const row = displayValues[offset] || [];
-    // 快速跳过整行空白（连名字/链接/日期都没有）
-    if (
-      !textQGallery_(row[0]) &&
-      !textQGallery_(row[1]) &&
-      !textQGallery_(row[2]) &&
-      !textQGallery_(row[7]) &&
-      !textQGallery_(row[9])
-    ) {
-      continue;
-    }
-
-    const formulaC = textQGallery_(fC[offset] && fC[offset][0]);
-    const formulaE = textQGallery_(fE[offset] && fE[offset][0]);
-    const formulaT = textQGallery_(fT[offset] && fT[offset][0]);
-    const formulaW = textQGallery_(fW[offset] && fW[offset][0]);
-    const valueE = vE[offset] && vE[offset][0];
-    const valueT = vT[offset] && vT[offset][0];
-    const valueW = vW[offset] && vW[offset][0];
-    const displayW = textQGallery_(dW[offset] && dW[offset][0]);
-
-    const display = function (index) {
-      return sanitizeQGalleryDisplay_(row[index]);
-    };
+    const display = function(index) { return sanitizeQGalleryDisplay_(row[index]); };
+    if (!row.some(function(cell) { return Boolean(textQGallery_(cell)); })) continue;
     const rowNumber = startRow + offset;
-    // 名字 = A 列原样（不要用渠道/小组名顶替）
-    const nameRaw = display(0);
-    const designerRaw = display(27);
-    const name = nameRaw || "";
-    const postId = display(1);
-    const postLink =
-      extractQGalleryUrl_(formulaC) || extractQGalleryUrl_(display(2)) || display(2);
-    const postType = display(12);
-    const category = display(8);
-
-    const eDisplay = display(4);
-    const imageFromE = extractNameImageFromW_(formulaE, eDisplay, valueE, formulaE, eDisplay, valueE);
-    const thumbnailUrl = imageFromE || extractQGalleryUrl_(formulaE || eDisplay) || "";
-
-    let nameImage = extractNameImageFromW_(
-      formulaW,
-      displayW,
-      valueW,
-      formulaW,
-      display(22),
-      valueW
-    );
-    if (!nameImage && /=\s*IMAGE\s*\(\s*\$?[A-Z]{1,3}\$?\d+/i.test(formulaW || "")) {
-      nameImage = thumbnailUrl;
-    }
+    const formulaAt = function(values) { return textQGallery_(values[offset] && values[offset][0]); };
+    const valueAt = function(values) { return values[offset] && values[offset][0]; };
+    const name = display(col("管理员", 0, ["名字"]));
+    const postId = display(col("帖文ID", 1));
+    const postLinkFormula = formulaAt(postLinkFormulas);
+    const postLink = extractQGalleryUrl_(postLinkFormula) || extractQGalleryUrl_(display(postLinkCol)) || display(postLinkCol);
+    const postType = display(col("帖文类型", 12));
+    const category = display(col("图片类型", 8, ["图片类别"]));
+    const imageFormula = formulaAt(imageFormulas), imageValue = valueAt(imageValues), imageDisplay = display(imageCol);
+    const thumbnailUrl = extractNameImageFromW_(imageFormula, imageDisplay, imageValue, imageFormula, imageDisplay, imageValue)
+      || extractQGalleryUrl_(imageFormula || imageDisplay) || "";
+    const thumbnailFormula = formulaAt(thumbnailFormulas), thumbnailValue = valueAt(thumbnailValues);
+    const thumbnailDisplay = textQGallery_(thumbnailDisplays[offset] && thumbnailDisplays[offset][0]);
+    let nameImage = extractNameImageFromW_(thumbnailFormula, thumbnailDisplay, thumbnailValue, thumbnailFormula, thumbnailDisplay, thumbnailValue);
     if (!nameImage) nameImage = thumbnailUrl;
-
-    const fallbackThumbnailUrl = nameImage || "";
-    const authorId = textQGallery_(display(17)).replace(/[^\d]/g, "");
-    const avatarUrl = extractQGalleryAvatarUrl_(
-      formulaT,
-      display(19),
-      valueT,
-      authorId,
-      avatarAccessToken
-    );
-
-    const thumbnailFileId =
-      extractQGalleryDriveId_(thumbnailUrl) ||
-      extractQGalleryDriveId_(fallbackThumbnailUrl) ||
-      extractQGalleryDriveId_(nameImage);
+    const pageId = display(col("专页id", 17, ["专页ID", "页面ID"]));
+    const avatarUrl = extractQGalleryAvatarUrl_(formulaAt(avatarFormulas), display(avatarCol), valueAt(avatarValues), pageId);
     const postFileId = extractQGalleryDriveId_(postLink);
-    const fileId =
-      thumbnailFileId ||
-      postFileId ||
-      extractQGalleryDriveId_(formulaC + " " + formulaE);
-    const previewUrl =
-      thumbnailUrl ||
-      fallbackThumbnailUrl ||
-      (fileId ? "https://drive.google.com/uc?export=view&id=" + encodeURIComponent(fileId) : "");
-
+    const thumbnailFileId = extractQGalleryDriveId_(thumbnailUrl) || extractQGalleryDriveId_(nameImage);
+    const fileId = thumbnailFileId || postFileId || extractQGalleryDriveId_(postLinkFormula + " " + imageFormula);
+    const previewUrl = thumbnailUrl || nameImage || (fileId ? "https://drive.google.com/uc?export=view&id=" + encodeURIComponent(fileId) : "");
+    const pageName = display(col("专页名字", 24, ["页名", "管理员"]));
     const asset = {
       id: postId || postLink || fileId || "row-" + rowNumber,
-      rowNumber: rowNumber,
-      title: name || postType || "素材 " + rowNumber,
-      name: name,
-      postId: postId,
-      postLink: postLink,
-      lead: display(3),
-      water: display(25),
-      waterTime: display(26),
-      sourceUrl: postLink,
-      fileId: fileId,
-      previewUrl: previewUrl,
-      thumbnailUrl: previewUrl,
-      thumbnailFallbackUrl: fallbackThumbnailUrl,
-      viewUrl: postFileId
-        ? "https://drive.google.com/file/d/" + encodeURIComponent(postFileId) + "/view"
-        : postLink,
-      content: display(5),
-      rewrite: display(6),
-      date: display(7) || findQGalleryDate_(row),
-      type: category || postType || "",
-      category: category,
-      likes: display(9),
-      comments: display(10),
-      shares: display(11),
-      postType: postType,
-      ocr: display(13),
-      ocrTranslation: display(14),
-      audioText: display(15),
-      audioTranslation: display(16),
-      maker: display(17) || "",
-      authorName: display(17),
-      group: display(18) || display(20) || "",
-      sourceType: display(20),
-      sourceChannel: display(21),
-      conversionRate: display(23),
-      mediaMode: isVideoQGallery_(postType, category) ? "video" : "image",
-      pageName: display(24),
-      avatarUrl: avatarUrl,
-      designer: isPlaceholderQGalleryLabel_(designerRaw) ? "" : designerRaw,
-      nameImage: nameImage,
-      nameImageFormula: formulaW || ""
+      rowNumber: rowNumber, title: name || postType || "素材 " + rowNumber, name: name,
+      postId: postId, postLink: postLink, lead: display(col("引流", 3)),
+      water: display(col("交教会", 25, ["水滴", "水滴数"])),
+      waterTime: display(waterTimeCol >= 0 ? waterTimeCol : dateCol), sourceUrl: postLink,
+      fileId: fileId, previewUrl: previewUrl, thumbnailUrl: previewUrl,
+      thumbnailFallbackUrl: nameImage || "",
+      viewUrl: postFileId ? "https://drive.google.com/file/d/" + encodeURIComponent(postFileId) + "/view" : postLink,
+      content: display(col("帖文内容", 5, ["内容"])), rewrite: display(col("帖文翻译", 6, ["翻译"])),
+      date: display(dateCol) || findQGalleryDate_(row),
+      type: category || postType || "", category: category, likes: display(col("点赞", 9)),
+      comments: display(col("评论", 10)), shares: display(col("分享", 11)), postType: postType,
+      ocr: display(col("OCR", 13)), ocrTranslation: display(col("OCR翻译", 14)),
+      audioText: display(col("音频文本", 15)), audioTranslation: display(col("音频文本翻译", 16)),
+      maker: pageName, authorName: pageName, authorId: pageId,
+      group: display(col("来源类型", 20)), sourceType: display(col("来源类型", 20)), sourceChannel: "",
+      conversionRate: display(col("转换率", 23)), mediaMode: isVideoQGallery_(postType, category) ? "video" : "image",
+      pageName: pageName, avatarUrl: avatarUrl,
+      designer: sanitizeQGalleryDisplay_(display(col("美工", 27, ["美工名字"]))),
+      nameImage: nameImage, nameImageFormula: thumbnailFormula || ""
     };
-    if (Q_GALLERY_DRIVE_EXPORT.includeRaw) {
-      asset.raw = row;
-    }
-
+    if (Q_GALLERY_DRIVE_EXPORT.includeRaw) asset.raw = row;
     if (isMeaningfulQGalleryAsset_(asset)) assets.push(asset);
   }
   return assets;
+}
+
+function getQGalleryHeaderInfo_(sheet, width) {
+  const known = ["管理员", "语言", "专页id", "专页名字", "帖文链接", "引流", "帖文ID", "头像", "图片链接", "发帖日期", "点赞", "评论", "分享", "帖文类型", "帖文内容", "帖文翻译", "文案类型", "OCR", "OCR翻译", "图片类型", "音频文本", "音频文本翻译", "题材类型", "来源类型", "缩略图", "交教会", "转换率", "美工"];
+  let best = {}, bestScore = 0, bestRow = 0;
+  for (let rowNumber = 1; rowNumber <= Math.min(2, sheet.getLastRow()); rowNumber += 1) {
+    const cells = sheet.getRange(rowNumber, 1, 1, width).getDisplayValues()[0], map = {};
+    cells.forEach(function(cell, index) { const key = normalizeQGalleryHeader_(cell); if (key && map[key] === undefined) map[key] = index; });
+    const score = known.reduce(function(total, header) { return total + (map[normalizeQGalleryHeader_(header)] !== undefined ? 1 : 0); }, 0);
+    if (score > bestScore) { best = map; bestScore = score; bestRow = rowNumber; }
+  }
+  return { map: best, row: bestRow, score: bestScore };
+}
+
+function getQGallerySourceHeaderMap_(sheet, width) {
+  return getQGalleryHeaderInfo_(sheet, width).map;
+}
+
+function getQGalleryDataStartRow_(sheet) {
+  const width = Math.max(1, Math.min(Math.max(sheet.getLastColumn(), 28), 60));
+  const info = getQGalleryHeaderInfo_(sheet, width);
+  return info.score >= 2 ? info.row + 1 : Number(Q_GALLERY_DRIVE_EXPORT.startRow || 3);
+}
+
+function normalizeQGalleryHeader_(value) {
+  return textQGallery_(value).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, "");
+}
+
+function getQGalleryColumnIndex_(headers, name, fallback, aliases) {
+  const names = [name].concat(aliases || []);
+  for (let i = 0; i < names.length; i += 1) { const found = headers && headers[normalizeQGalleryHeader_(names[i])]; if (found !== undefined) return found; }
+  return fallback;
 }
 
 /** 兼容旧调用：整表读（大表易超时，仅调试用） */
 function readQGalleryAssetRows_(sheet) {
   const lastRow = sheet.getLastRow();
   const lastColumn = Math.max(sheet.getLastColumn(), 28);
-  if (lastRow < Q_GALLERY_DRIVE_EXPORT.startRow) return [];
-  const token = getQGalleryAvatarAccessToken_(sheet);
+  const dataStartRow = getQGalleryDataStartRow_(sheet);
+  if (lastRow < dataStartRow) return [];
   return readQGalleryAssetRowsBatch_(
     sheet,
-    Q_GALLERY_DRIVE_EXPORT.startRow,
-    lastRow - Q_GALLERY_DRIVE_EXPORT.startRow + 1,
-    lastColumn,
-    token
+    dataStartRow,
+    lastRow - dataStartRow + 1,
+    lastColumn
   );
 }
 
@@ -1297,133 +1255,41 @@ function readQGalleryAssetRows_(sheet) {
 // 头像 token / 图片 URL 提取
 // ---------------------------------------------------------------------------
 
-function getQGalleryAvatarAccessToken_(sheet) {
-  try {
-    const props = PropertiesService.getScriptProperties();
-    const fromProp =
-      props.getProperty("FB_ACCESS_TOKEN") ||
-      props.getProperty("FACEBOOK_ACCESS_TOKEN") ||
-      props.getProperty("FB_GRAPH_ACCESS_TOKEN") ||
-      "";
-    if (fromProp && String(fromProp).trim()) return String(fromProp).trim();
-  } catch (e) {}
+function extractQGalleryAvatarUrl_(tFormula, tDisplay, tValue, authorId) {
+  const rawId = textQGallery_(authorId).trim();
+  const match = rawId.match(/^(\d{8,})$|(?:facebook\.com|fb\.com)\/(\d{8,})(?:_\d+)?(?:[/?#]|$)/i);
+  const id = match ? (match[1] || match[2]) : "";
+  if (/^\d{8,}$/.test(id)) {
+    return "https://graph.facebook.com/" + encodeURIComponent(id) + "/picture?width=120&height=120";
+  }
 
-  if (!sheet) return "";
-
-  try {
-    const maxRows = Math.min(80, sheet.getMaxRows());
-    const formulas = sheet.getRange(1, 20, maxRows, 1).getFormulas();
-    for (let r = 0; r < formulas.length; r += 1) {
-      const token = extractAccessTokenFromText_(formulas[r][0]);
-      if (token) return token;
-    }
-  } catch (e) {}
-
-  try {
-    const rows = Math.min(40, sheet.getMaxRows());
-    const cols = Math.min(30, sheet.getMaxColumns());
-    const formulas = sheet.getRange(1, 1, rows, cols).getFormulas();
-    for (let r = 0; r < formulas.length; r += 1) {
-      for (let c = 0; c < formulas[r].length; c += 1) {
-        const token = extractAccessTokenFromText_(formulas[r][c]);
-        if (token) return token;
-      }
-    }
-  } catch (e) {}
-
-  return "";
-}
-
-function extractAccessTokenFromText_(value) {
-  const text = textQGallery_(value);
-  if (!text || text.indexOf("access_token") < 0) return "";
-  const m = text.match(/access_token=([^"&\s,)'"<>]+)/i);
-  if (!m) return "";
-  let token = m[1].replace(/["')\]]+$/g, "").trim();
-  token = token.replace(/["']$/g, "");
-  if (token.length < 20) return "";
-  return token;
-}
-
-function extractQGalleryAvatarUrl_(tFormula, tDisplay, tValue, authorId, sheetToken) {
   const cellUrl = cellImageContentUrl_(tValue);
-  if (cellUrl) return normalizeImageDisplayUrl_(cellUrl) || cellUrl;
+  if (cellUrl) return stripQGalleryAccessToken_(normalizeImageDisplayUrl_(cellUrl) || cellUrl);
 
   let url = extractImageUrlFromText_(tFormula) || extractImageUrlFromText_(tDisplay) || "";
   if (url) {
     url = normalizeImageDisplayUrl_(url) || url;
-    if (/graph\.facebook\.com/i.test(url) && /\/picture/i.test(url) && !/access_token=/i.test(url)) {
-      const token = extractAccessTokenFromText_(tFormula) || sheetToken;
-      if (token) {
-        url += (url.indexOf("?") >= 0 ? "&" : "?") + "access_token=" + encodeURIComponent(token);
-      }
-    }
-    return url;
+    return stripQGalleryAccessToken_(url);
   }
 
-  const id = textQGallery_(authorId).replace(/[^\d]/g, "");
-  if (!/^\d{8,}$/.test(id)) return "";
+  return "";
+}
 
-  const token = extractAccessTokenFromText_(tFormula) || sheetToken || "";
-  let graph =
-    "https://graph.facebook.com/" +
-    encodeURIComponent(id) +
-    "/picture?width=120&height=120";
-  if (token) {
-    graph += "&access_token=" + encodeURIComponent(token);
+function stripQGalleryAccessToken_(value) {
+  try {
+    const url = new URL(String(value || ""));
+    url.searchParams.delete("access_token");
+    return url.toString();
+  } catch (e) {
+    return String(value || "").replace(/([?&])access_token=[^&\s]+&?/ig, function(_match, prefix) { return prefix === "?" ? "?" : ""; });
   }
-  return graph;
 }
 
 /**
  * 仅同步 Facebook 头像 token 到网站（无需重导全表）
  */
 function qGallerySyncFbAvatarToken() {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = spreadsheet.getSheetByName(Q_GALLERY_DRIVE_EXPORT.dataSheetName);
-  if (!sheet) throw new Error("Missing sheet: " + Q_GALLERY_DRIVE_EXPORT.dataSheetName);
-
-  const token = getQGalleryAvatarAccessToken_(sheet);
-  if (!token) {
-    throw new Error(
-      "未在表格公式中找到 access_token。请打开 T 列任意带头像的单元格，确认公式含 access_token=...；或在脚本属性设置 FB_ACCESS_TOKEN"
-    );
-  }
-
-  const props = PropertiesService.getScriptProperties();
-  const publishUrl =
-    props.getProperty("PROMO_PUBLISH_URL") ||
-    Q_GALLERY_DRIVE_EXPORT.promoPublishUrl ||
-    "https://promo.example.com/api/publish-cache";
-  const secret =
-    props.getProperty("PROMO_PUBLISH_SECRET") ||
-    Q_GALLERY_DRIVE_EXPORT.promoPublishSecret ||
-    "";
-  if (!secret) {
-    throw new Error("请在脚本属性设置 PROMO_PUBLISH_SECRET（= Cloudflare CACHE_PUBLISH_SECRET）");
-  }
-
-  const response = UrlFetchApp.fetch(publishUrl, {
-    method: "post",
-    contentType: "application/json",
-    headers: { "x-publish-secret": secret },
-    payload: JSON.stringify({ action: "set-fb-token", fbAccessToken: token }),
-    muteHttpExceptions: true,
-    followRedirects: true
-  });
-  const code = response.getResponseCode();
-  const body = response.getContentText();
-  let parsed;
-  try {
-    parsed = JSON.parse(body);
-  } catch (e) {
-    parsed = { ok: false, error: body.slice(0, 300), http: code };
-  }
-  Logger.log("sync fb token: " + JSON.stringify(parsed));
-  if (!parsed || !parsed.ok) {
-    throw new Error((parsed && parsed.error) || "同步 token 失败 HTTP " + code);
-  }
-  return parsed;
+  throw new Error("请在 Cloudflare Pages 项目的 Settings → Variables and Secrets 中设置 FB_GRAPH_ACCESS_TOKEN；该令牌不再通过表格或公开缓存同步。");
 }
 
 function extractNameImageFromW_(wFormula, wDisplay, wValue, formula22, display22, value22) {

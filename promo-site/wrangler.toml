@@ -3,20 +3,20 @@
 #   npx wrangler pages deploy . --project-name=q-gallery-promo --commit-dirty=true --branch=production
 #
 # 日更镜像到 R2（减配额）:
-#   curl -X POST https://promo.example.com/api/publish-cache \
+#   curl -X POST https://<SITE_HOST>/api/publish-cache \
 #     -H "x-publish-secret: $CACHE_PUBLISH_SECRET" \
 #     -H "Content-Type: application/json" \
 #     -d "{\"manifestUrl\":\"https://drive.google.com/uc?export=download&id=...\"}"
 
-name = "q-gallery-promo"
+name = "gallery-example"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 pages_build_output_dir = "."
 
-# 与素材库相同 bucket：日更写 promo/*，读走 gallery-cache.example.com
+# 与素材库相同 bucket：日更写 promo/*，读走 <R2_PUBLIC_HOST>
 [[r2_buckets]]
 binding = "GALLERY_CACHE"
-bucket_name = "q-gallery-json-cache"
+bucket_name = "gallery-example-json"
 
 # Secrets / vars（Dashboard 或 wrangler pages secret put）:
 # ACCESS_PASSWORD
@@ -24,4 +24,5 @@ bucket_name = "q-gallery-json-cache"
 # APPS_SCRIPT_API_SECRET
 # DRIVE_CACHE_MANIFEST_URL
 # CACHE_PUBLISH_SECRET
-# PUBLIC_CACHE_BASE=https://gallery-cache.example.com
+# FB_GRAPH_ACCESS_TOKEN (头像代理使用；只存 Pages Secret，不写入公开 R2 JSON)
+# PUBLIC_CACHE_BASE=https://<R2_PUBLIC_HOST>

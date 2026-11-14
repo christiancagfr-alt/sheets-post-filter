@@ -17,7 +17,7 @@ function normalizeUrl(value) {
   return text;
 }
 
-function isAllowedUrl(value) {
+function isAllowedUrl(value, env = {}) {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:") return false;
@@ -30,7 +30,7 @@ function isAllowedUrl(value) {
     ) {
       return true;
     }
-    return host === "example.com" || host.endsWith(".example.com");
+    return [env.PUBLIC_CACHE_BASE, env.PUBLIC_JSON_CACHE_BASE].some((item) => { try { return new URL(item).origin === url.origin; } catch { return false; } });
   } catch {
     return false;
   }
@@ -47,7 +47,7 @@ export async function onRequest(context) {
 
   const body = await readJsonBody(request);
   const targetUrl = normalizeUrl(body.url);
-  if (!targetUrl || !isAllowedUrl(targetUrl)) {
+  if (!targetUrl || !isAllowedUrl(targetUrl, env)) {
     return json({ ok: false, error: "只支持 Google Drive / 已授权 HTTPS 缓存链接。" }, 400);
   }
 

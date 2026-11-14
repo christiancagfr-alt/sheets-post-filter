@@ -3,7 +3,7 @@ const crypto = require("crypto");
 const COOKIE_NAME = "q_gallery_auth";
 const MAX_CACHE_BYTES = 60 * 1024 * 1024;
 const MANIFEST_URL = process.env.DRIVE_CACHE_MANIFEST_URL || "";
-const DRIVE_FILE_IDS = String(process.env.DRIVE_CACHE_FILE_IDS || "").split(",").map(value => value.trim()).filter(Boolean);
+const DRIVE_FILE_IDS = [];
 
 function getAccessPassword() {
   return process.env.ACCESS_PASSWORD || "";
@@ -142,6 +142,7 @@ module.exports = async function handler(req, res) {
 
     // 2) Manifest 分片 / 内置 Drive 文件列表
     const manifestResult = await fetchManifestChunks();
+    if (!manifestResult && !DRIVE_FILE_IDS.length) throw new Error("DRIVE_CACHE_MANIFEST_URL is not configured");
     const chunks = manifestResult
       ? manifestResult.chunks
       : await Promise.all(DRIVE_FILE_IDS.map(fetchJsonFile));

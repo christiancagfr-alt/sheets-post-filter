@@ -715,13 +715,14 @@ h2 {
 
 .gallery {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 248px), 1fr));
+  gap: 14px;
 }
 
 .asset-card {
   display: grid;
   grid-template-rows: auto 1fr;
+  min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -769,6 +770,7 @@ h2 {
 
 .card-body {
   display: grid;
+  min-width: 0;
   gap: 8px;
   padding: 10px;
 }
@@ -882,6 +884,13 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.detail-list.is-collapsed dd {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
 .text-block {
   display: -webkit-box;
   overflow: hidden;
@@ -913,6 +922,20 @@ h2 {
 }
 
 .more-text-button:hover {
+  color: var(--brand-dark);
+}
+
+.more-details-button {
+  justify-self: start;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.more-details-button:hover {
   color: var(--brand-dark);
 }
 

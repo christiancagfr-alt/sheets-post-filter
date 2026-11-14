@@ -274,6 +274,9 @@ button, .linkbtn {
 }
 
 .src-table { margin: 8px 0 10px; }
+.filter-mappings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+.filter-mappings label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: center; margin: 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.filter-mappings label input { min-width: 0; margin: 0; }
 .src-head, .src-row {
   display: grid;
   grid-template-columns: 140px 1fr 64px;
@@ -417,6 +420,7 @@ dialog h3 { margin-top: 0; }
   .head-actions { flex-direction: column; }
   .row4 { grid-template-columns: 1fr; }
   .span2 { grid-column: auto; }
+  .filter-mappings { grid-template-columns: 1fr; }
   .src-head, .field-head, .mapping-head { display: none; }
   .src-row, .field-row, .mapping-row { grid-template-columns: 1fr; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 }

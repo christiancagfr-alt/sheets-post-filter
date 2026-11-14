@@ -19,7 +19,7 @@ class DirectPublishTests(unittest.TestCase):
     def book(self):
         ws=FakeSheet('图片',10,[['日期','成品链接','标题','分类','','','制作人'],
                                 ['2026-10-20','点击打开','一张图','类别','','','制作人甲']])
-        ws.links[1,1]='https://drive.google.com/file/d/EXAMPLE_IDENTIFIER_0066/view'
+        ws.links[1,1]='https://drive.google.com/file/d/example-file-id-01-xxxxxxxxxxxxxxxx/view'
         return FakeBook('s'*25,[FakeSheet('隐藏',9,[['不读']],hidden=True),ws])
 
     def test_direct_rows_headers_and_rich_links_need_no_merge_or_destination(self):
@@ -78,3 +78,4 @@ class DirectPublishTests(unittest.TestCase):
         with patch('cf_accounts.site_for_menu',return_value=({},{})),patch.object(app,'save_config') as save,patch.object(app,'enqueue_job',return_value=None) as enqueue:
             self.assertIsNone(app.start_worksheet_publish_job(cfg))
         save.assert_called_once();enqueue.assert_called_once()
+

@@ -15,22 +15,22 @@ class SummaryPublishTests(unittest.TestCase):
                       wm_columns=[{'header':name,'column':column} for name,column in zip(['日期','成品链接','名字','分类'],'ABCD')])
 
     def test_image_and_video_release_dates_categories_and_drive_previews(self):
-        row=['2026-10-20','成品文件','名字','示例分类1']
-        url='https://drive.google.com/file/d/EXAMPLE_IDENTIFIER_0066/view'
+        row=['2026-10-20','成品文件','名字','Flow-omini']
+        url='https://drive.google.com/file/d/example-file-id-01-xxxxxxxxxxxxxxxx/view'
         for kind,days,date in [('image',4,'2026-10-24'),('video',7,'2026-10-27')]:
             assets,meta,skipped=publish.rows_to_summary_assets(self.cfg(kind,days),[row],[{1:url}])
             self.assertEqual(assets[0]['releaseDate'],date)
-            self.assertEqual(assets[0]['type'],'示例分类1')
+            self.assertEqual(assets[0]['type'],'Flow-omini')
             self.assertIn('thumbnail',assets[0]['previewUrl'])
             self.assertEqual(assets[0]['mediaType'],kind)
-            self.assertEqual(meta['releaseCounts'][date]['示例分类1'],1)
+            self.assertEqual(meta['releaseCounts'][date]['Flow-omini'],1)
             self.assertEqual(skipped,0)
         self.assertTrue(assets[0]['videoUrl'].endswith('/preview'))
         self.assertIn('export=download',assets[0]['downloadUrl'])
         self.assertNotEqual(assets[0]['downloadUrl'],assets[0]['viewUrl'])
 
     def test_download_link_keeps_drive_resource_key_and_other_file_hosts(self):
-        url='https://drive.google.com/file/d/EXAMPLE_IDENTIFIER_0066/view?resourcekey=shared-key'
+        url='https://drive.google.com/file/d/example-file-id-01-xxxxxxxxxxxxxxxx/view?resourcekey=shared-key'
         self.assertIn('resourcekey=shared-key',publish.download_url(url))
         other='https://files.example.com/image.png?id=abc123456789'
         self.assertEqual(publish.download_url(other),other)
@@ -193,7 +193,7 @@ class SummaryPublishTests(unittest.TestCase):
         changed={**asset,'postLink':'https://example.com/two'}
         self.assertNotEqual(legacy.assets_fingerprint([asset]),legacy.assets_fingerprint([changed]))
         state={'cf_fingerprint':legacy.assets_fingerprint([asset])}
-        cfg=Config(cf_publish_url='https://one.example.com/api/publish-cache',cf_publish_secret='s')
+        cfg=Config(cf_publish_url='https://one.example.com/api/publish-cache',cf_publish_secret='test-secret')
         with patch.object(legacy,'rows_to_assets',return_value=[asset]),patch.object(legacy,'load_sync_state',side_effect=lambda:copy.deepcopy(state)),patch.object(legacy,'save_sync_state',side_effect=lambda value:state.update(copy.deepcopy(value))),patch.object(legacy,'remember_cf_fingerprint'),patch.object(legacy,'_http_json',return_value={'ok':True}) as send:
             first=legacy.publish_assets_to_cloudflare(cfg,[],[],log=lambda _:None)
             cfg.cf_publish_url='https://two.example.com/api/publish-cache'
@@ -213,24 +213,24 @@ class AccountIsolationTests(unittest.TestCase):
         self.addCleanup(self.load.stop);self.addCleanup(self.save.stop)
 
     def test_multiple_tokens_and_menu_scopes_survive_new_login(self):
-        accounts.register_accounts('token-one',[{'id':'one','name':'一'}],allowed_menu_ids=['images'])
-        accounts.register_accounts('token-two',[{'id':'two','name':'二'}],allowed_menu_ids=['videos'])
+        accounts.register_accounts('example-token-one',[{'id':'one','name':'一'}],allowed_menu_ids=['images'])
+        accounts.register_accounts('example-token-two',[{'id':'two','name':'二'}],allowed_menu_ids=['videos'])
         rows={row['id']:row for row in accounts.profiles()}
-        self.assertEqual(rows['one']['api_token'],'token-one')
-        self.assertEqual(rows['two']['api_token'],'token-two')
+        self.assertEqual(rows['one']['api_token'],'example-token-one')
+        self.assertEqual(rows['two']['api_token'],'example-token-two')
         self.assertEqual(accounts.require_menu('one','images')['id'],'one')
         with self.assertRaisesRegex(ValueError,'未获准'):accounts.require_menu('one','videos')
 
     def test_legacy_account_site_owner_not_changed_by_another_login(self):
         self.state={'account_id':'old','account_name':'老账号','api_token':'example-old-token',
                     'host':'old.example.com','project':'old-project','bucket':'old-bucket','secret':'old-secret'}
-        accounts.register_accounts('new-token',[{'id':'new','name':'新账号'}])
+        accounts.register_accounts('example-new-token',[{'id':'new','name':'新账号'}])
         site=accounts.known_gallery_sites(self.state)[0]
         self.assertEqual(site['account_id'],'old')
         self.assertEqual({row['id'] for row in accounts.profiles()},{'old','new'})
 
     def test_selected_account_cannot_publish_other_account_site(self):
-        accounts.register_accounts('token-one',[{'id':'one','name':'一'}],allowed_menu_ids=['images'])
+        accounts.register_accounts('example-token-one',[{'id':'one','name':'一'}],allowed_menu_ids=['images'])
         self.state['sites']=[{'host':'media.example.com','project':'p','bucket':'b','account_id':'two','kind':'summary'}]
         with self.assertRaisesRegex(ValueError,'不属于'):accounts.site_for_menu('one','images','media.example.com',kind='summary')
 

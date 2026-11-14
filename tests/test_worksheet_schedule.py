@@ -127,3 +127,4 @@ class WorksheetScheduleTests(unittest.TestCase):
         cfg=app._cfg_from_payload({'wm_schedule_enabled':True,'wm_schedule_minutes':'480','wm_schedule_merge':False,'wm_schedule_publish':True},base=Config())
         self.assertTrue(cfg.wm_schedule_enabled);self.assertEqual(int(cfg.wm_schedule_minutes),480)
         self.assertFalse(cfg.wm_schedule_merge);self.assertTrue(cfg.wm_schedule_publish)
+

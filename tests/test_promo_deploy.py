@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 import json
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +44,33 @@ class PromoDeployHelperTests(unittest.TestCase):
         self.assertEqual(fields['_routes.json'][1],routes)
         self.assertEqual(fields['_headers'][1],headers)
         self.assertEqual(fields['branch'],'production')
+
+    def test_existing_production_branch_is_preserved(self):
+        from promo_deploy import _create_deployment
+        api=Mock();api.result.return_value={'id':'example-deploy'}
+        _create_deployment(api,'example-account','example-project',{},b'example',lambda _:None,production_branch='main')
+        self.assertEqual(dict(api.post.call_args.kwargs['form'])['branch'],'main')
+
+    def test_failed_or_pending_deployments_are_not_reported_as_success(self):
+        from promo_deploy import wait_for_deployment
+        api=Mock();api.result.side_effect=lambda value:value
+        api.get.side_effect=[
+            {'latest_stage':{'name':'build','status':'failure'},'stages':[{'name':'build','status':'failure'}]},
+            {'data':[{'line':'Error: Worker bundle rejected'},
+                     {'line':'CACHE_PUBLISH_SECRET=example-do-not-show'}]},
+        ]
+        with self.assertRaises(CloudflareError) as raised:
+            wait_for_deployment(api,'example-account','example-project',{'id':'example'})
+        self.assertIn('阶段：build',str(raised.exception))
+        self.assertIn('Worker bundle rejected',str(raised.exception))
+        self.assertNotIn('example-do-not-show',str(raised.exception))
+        self.assertTrue(api.get.call_args_list[1].args[0].endswith('/history/logs'))
+        api.get.side_effect=None
+        api.get.return_value={'latest_stage':{'name':'deploy','status':'success'}}
+        wait_for_deployment(api,'example-account','example-project',{'id':'example'})
+        api.get.return_value={'latest_stage':{'name':'deploy','status':'active'}}
+        with patch('promo_deploy.time.sleep'),self.assertRaisesRegex(CloudflareError,'处理中'):
+            wait_for_deployment(api,'example-account','example-project',{'id':'example'})
 
     def test_pending_domain_uses_pages_address_instead_of_reporting_custom_domain_ready(self):
         from unittest.mock import Mock
@@ -121,7 +148,7 @@ class PromoDeployHelperTests(unittest.TestCase):
 
     def test_token_create_url_uses_cloudflare_permission_keys(self):
         keys = {item["key"] for item in TOKEN_PERMISSIONS}
-        self.assertEqual(keys, {"page", "workers_r2", "workers_scripts", "dns", "account_settings"})
+        self.assertEqual(keys, {"page", "workers_r2", "workers_scripts", "dns", "account_settings", "account_analytics"})
         self.assertNotIn("pages", keys)
         self.assertNotIn("workers_r2_storage", keys)
         self.assertIn("permissionGroupKeys=", TOKEN_CREATE_URL)
@@ -144,6 +171,61 @@ class PromoDeployHelperTests(unittest.TestCase):
         self.assertFalse(looks_like_global_api_key("cfut_not_a_global_key_example_token"))
         self.assertIn("登录 Cloudflare", AUTH_HELP)
         self.assertIn("Pages 编辑", AUTH_HELP)
+
+    def test_r2_subscription_error_stops_before_project_creation(self):
+        api=Mock()
+        api.get.side_effect=CloudflareAPI._response_error(400,
+            '{"errors":[{"code":10042,"message":"Please enable R2 through the Cloudflare Dashboard."}]}')
+        with self.assertRaises(CloudflareError) as raised:
+            from promo_deploy import _ensure_bucket
+            _ensure_bucket(api,'example-account','example-bucket',lambda _message:None)
+        self.assertIn('尚未开通 R2',str(raised.exception))
+        api.post.assert_not_called()
+
+    def test_only_generated_app_project_shape_is_eligible_for_partial_resume(self):
+        from promo_deploy import _is_resumable_partial_project
+        project='gallery-2f506d555a0e';host=project+'.pages.dev'
+        remote={'name':project,'subdomain':host,'deployment_configs':{'production':{
+            'r2_buckets':{'GALLERY_CACHE':{'name':project+'-json'}},
+            'env_vars':{'PUBLIC_CACHE_BASE':{'value':'https://'+host+'/cdn'},
+                'CACHE_PUBLISH_SECRET':{'type':'secret_text','value':''}}}}}
+        self.assertTrue(_is_resumable_partial_project(remote,host,project,'promo'))
+        self.assertFalse(_is_resumable_partial_project(remote,host,'user-owned-project','promo'))
+        remote['deployment_configs']['production']['r2_buckets']['GALLERY_CACHE']['name']='other-example'
+        self.assertFalse(_is_resumable_partial_project(remote,host,project,'promo'))
+
+    def test_retry_resumes_partial_generated_site_without_recreating_r2(self):
+        from promo_deploy import deploy_gallery
+        from gallery_analytics import dataset_name
+        project='gallery-2f506d555a0e';host=project+'.pages.dev'
+        remote={'name':project,'subdomain':host,'domains':[host],'production_branch':'production',
+            'deployment_configs':{mode:{
+                'r2_buckets':{'GALLERY_CACHE':{'name':project+'-json'}},
+                'analytics_engine_datasets':{'GALLERY_ANALYTICS':{'dataset':dataset_name(project)}},
+                'env_vars':{'PUBLIC_CACHE_BASE':{'value':'https://'+host+'/cdn'},
+                    'CACHE_PUBLISH_SECRET':{'type':'secret_text','value':''},
+                    'ACCESS_PASSWORD':{'type':'secret_text','value':''}}} for mode in ('production','preview')}}
+        with patch('promo_deploy.load_cf_state',return_value={}), \
+             patch('promo_deploy.CloudflareAPI') as factory, \
+             patch('gallery_management.find_project',return_value=remote), \
+             patch('gallery_management.validate_project'), \
+             patch('promo_deploy._ensure_bucket') as ensure_bucket, \
+             patch('promo_deploy._ensure_project') as ensure_project, \
+             patch('promo_deploy.collect_static_files',return_value=[{'path':'/index.html','data':b'example'}]), \
+             patch('promo_deploy._upload_assets',return_value={'/index.html':'example-hash'}), \
+             patch('promo_deploy._create_deployment',return_value={'id':'example-deployment'}), \
+             patch('promo_deploy.wait_for_deployment'), \
+             patch('promo_deploy.save_cf_state') as save:
+            api=factory.return_value;api.result.side_effect=lambda value:value
+            result=deploy_gallery(host,token='example-token',account_id='example-account',
+                site_kind='promo',create_if_missing=True,project_name=project)
+        ensure_bucket.assert_not_called();ensure_project.assert_not_called()
+        self.assertTrue(result['ok']);self.assertEqual(result['secret'] != '',True)
+        secret_patch=api.patch.call_args.args[1]['deployment_configs']
+        for config in secret_patch.values():
+            self.assertEqual(config,{'env_vars':{'CACHE_PUBLISH_SECRET':{'type':'secret_text','value':result['secret']}}})
+        self.assertFalse(save.call_args.args[0]['sites'][0]['provisioning'])
+        self.assertFalse(save.call_args.args[0]['sites'][0]['access_password_known'])
 
     def test_pages_env_vars_set_or_clear_access_password(self):
         with_pw = pages_env_vars("pub-secret", "https://example.com/cdn", "site-pass")

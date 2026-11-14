@@ -6,7 +6,7 @@ const Q_CONFIG = {
   STATE_SHEET_NAME: "__q_gallery_refresh",
   SHARED_CACHE_JSON_SHEET_NAME: "__q_gallery_shared_cache_json",
   DRIVE_CACHE_FILE_NAME: "q-gallery-cache.json",
-  DRIVE_CACHE_FOLDER_ID: "EXAMPLE_IDENTIFIER_0020",
+  DRIVE_CACHE_FOLDER_ID: "example-folder-id",
   DRIVE_CACHE_FILE_ID_PROPERTY: "Q_GALLERY_DRIVE_CACHE_FILE_ID",
   DRIVE_CACHE_FOLDER_ID_PROPERTY: "Q_GALLERY_DRIVE_CACHE_FOLDER_ID",
   SECRET_PROPERTY: "Q_GALLERY_API_SECRET",
@@ -52,7 +52,8 @@ const CACHE_HEADERS = [
   "thumbnailFallbackUrl",
   "pageName",
   "avatarUrl",
-  "designer" // AB 列美工，排行榜名字后展示
+  "designer", // AB 列美工，排行榜名字后展示
+  "authorId" // C 列专页 ID，排行榜头像代理使用
 ];
 
 function doPost(e) {
@@ -202,7 +203,7 @@ function assets_(payload) {
     return { ok: true, rows: [], cursor: String(cursor), nextCursor: "", totalRows: 0, runId: state.runId || "", source: "sheet", catalogs: emptyCatalogs_() };
   }
 
-  const startRow = cursor + Q_CONFIG.DATA_START_ROW;
+  const startRow = cursor + getSourceDataStartRow_(source);
   const available = Math.max(0, lastRow - startRow + 1);
   const take = Math.min(limit, available);
   const records = take
@@ -212,10 +213,11 @@ function assets_(payload) {
         const values = range.getValues();
         const formulas = range.getFormulas();
         const richTextValues = range.getRichTextValues();
-        const avatarMap = buildAnchoredImageMap_(source, startRow, take, 20);
-        const avatarAccessToken = getAvatarAccessToken_(source);
+        const sourceHeaders = getSourceHeaderMap_(source);
+        const avatarColumn = getSourceColumnIndex_(sourceHeaders, "头像", 19);
+        const avatarMap = buildAnchoredImageMap_(source, startRow, take, avatarColumn + 1);
         return values.map(function(row, index) {
-          return mapRow_(row, startRow + index, formulas[index], richTextValues[index], avatarMap[startRow + index], avatarAccessToken);
+          return mapRow_(row, startRow + index, formulas[index], richTextValues[index], avatarMap[startRow + index], sourceHeaders);
         });
       })().filter(isValidRecord_)
     : [];
@@ -347,7 +349,7 @@ function refreshStart_(payload) {
       running: true,
       runId: Utilities.getUuid(),
       sourceSheet: source.getName(),
-      nextRow: Q_CONFIG.DATA_START_ROW,
+      nextRow: getSourceDataStartRow_(source),
       processed: 0,
       cachedRows: 0,
       activeCacheRows: Math.max(0, cache.getLastRow() - 1),
@@ -389,8 +391,9 @@ function refreshStep_(payload) {
     const source = getSourceSheet_();
     const nextCache = getNextCacheSheet_();
     ensureCacheHeader_(nextCache);
-    if (!state.nextRow || state.nextRow < Q_CONFIG.DATA_START_ROW) {
-      state.nextRow = Q_CONFIG.DATA_START_ROW;
+    const dataStartRow = getSourceDataStartRow_(source);
+    if (!state.nextRow || state.nextRow < dataStartRow) {
+      state.nextRow = dataStartRow;
     }
 
     recoverStaleStep_(state);
@@ -417,11 +420,12 @@ function refreshStep_(payload) {
     const values = range.getValues();
     const formulas = range.getFormulas();
     const richTextValues = range.getRichTextValues();
-    const avatarMap = buildAnchoredImageMap_(source, state.stepRow, take, 20);
-    const avatarAccessToken = getAvatarAccessToken_(source);
+    const sourceHeaders = getSourceHeaderMap_(source);
+    const avatarColumn = getSourceColumnIndex_(sourceHeaders, "头像", 19);
+    const avatarMap = buildAnchoredImageMap_(source, state.stepRow, take, avatarColumn + 1);
     const records = values.map(function(row, index) {
       const rowNumber = state.stepRow + index;
-      return mapRow_(row, rowNumber, formulas[index], richTextValues[index], avatarMap[rowNumber], avatarAccessToken);
+      return mapRow_(row, rowNumber, formulas[index], richTextValues[index], avatarMap[rowNumber], sourceHeaders);
     }).filter(isValidRecord_);
 
     appendCacheRows_(nextCache, records);
@@ -905,51 +909,107 @@ function growBatchSize_(value) {
   return Q_CONFIG.MAX_LIMIT;
 }
 
-function mapRow_(row, rowNumber, formulaRow, richTextRow, anchoredAvatarUrl, avatarAccessToken) {
-  const postType = text_(row[12]);
-  const category = text_(row[8]);
+function mapRow_(row, rowNumber, formulaRow, richTextRow, anchoredAvatarUrl, sourceHeaders) {
+  const index = function(name, fallback, aliases) {
+    return getSourceColumnIndex_(sourceHeaders, name, fallback, aliases);
+  };
+  const value = function(name, fallback, aliases) { return row[index(name, fallback, aliases)]; };
+  const postType = text_(value("帖文类型", 12));
+  const category = text_(value("图片类型", 8, ["图片类别"]));
   const mediaMode = isVideo_(postType, category) ? "video" : "image";
-  const postId = text_(row[1]);
-  const authorName = text_(row[17]);
-  const postLink = linkUrl_(row[2], formulaRow && formulaRow[2], richTextRow && richTextRow[2]);
-  const thumbnailUrl = imageUrl_(row[4], formulaRow && formulaRow[4], richTextRow && richTextRow[4]);
-  const avatarUrl = imageUrl_(row[19], formulaRow && formulaRow[19], richTextRow && richTextRow[19])
-    || anchoredAvatarUrl
-    || facebookAvatarUrl_(authorName, avatarAccessToken);
-  const thumbnailFallbackUrl = imageUrl_(row[22], formulaRow && formulaRow[22], richTextRow && richTextRow[22]);
+  const postIdIndex = index("帖文ID", 1);
+  const postLinkIndex = index("帖文链接", 2);
+  const imageIndex = index("图片链接", 4, ["缩略图"]);
+  const avatarIndex = index("头像", 19);
+  const postId = text_(row[postIdIndex]);
+  const postLink = linkUrl_(row[postLinkIndex], formulaRow && formulaRow[postLinkIndex], richTextRow && richTextRow[postLinkIndex]);
+  const thumbnailUrl = imageUrl_(row[imageIndex], formulaRow && formulaRow[imageIndex], richTextRow && richTextRow[imageIndex]);
+  const pageId = value("专页id", 17, ["专页ID", "页面ID"]);
+  // 优先使用专页 ID 生成 Graph URL，由站点服务端密钥取图；避免 ARRAYFORMULA
+  // 返回的临时 CellImage URL 过期。没有 ID 时再使用单元格图片地址。
+  const avatarUrl = stripFacebookAccessToken_(facebookAvatarUrl_(pageId, "")
+    || imageUrl_(row[avatarIndex], formulaRow && formulaRow[avatarIndex], richTextRow && richTextRow[avatarIndex])
+    || anchoredAvatarUrl);
+  const thumbnailFallbackIndex = index("缩略图", 22, ["图片链接"]);
+  const thumbnailFallbackUrl = imageUrl_(row[thumbnailFallbackIndex], formulaRow && formulaRow[thumbnailFallbackIndex], richTextRow && richTextRow[thumbnailFallbackIndex]);
+  const pageName = text_(value("专页名字", 24, ["页名", "管理员"]));
+  const dateIndex = index("发帖日期", 7, ["日期"]);
+  const waterTimeIndex = index("交教会时间", sourceHeaders && sourceHeaders.__headerRow ? -1 : 26, ["水滴时间", "水滴日期", "交教会日期"]);
 
   return {
     id: postId || postLink || "row-" + rowNumber,
     rowNumber: rowNumber,
-    name: text_(row[0]),
+    name: text_(value("管理员", 0, ["名字"])),
     postId: postId,
     postLink: postLink,
-    lead: row[3],
-    water: row[25],
-    waterTime: dateTimeText_(row[26]),
+    lead: value("引流", 3),
+    water: value("交教会", 25, ["水滴", "水滴数"]),
+    // 新表头没有独立水滴日期时，按发帖日期进入水滴榜时间范围。
+    waterTime: dateTimeText_(row[waterTimeIndex >= 0 ? waterTimeIndex : dateIndex]),
     thumbnailUrl: thumbnailUrl,
     thumbnailFallbackUrl: thumbnailFallbackUrl,
-    content: text_(row[5]),
-    rewrite: text_(row[6]),
-    date: dateText_(row[7]),
+    content: text_(value("帖文内容", 5, ["内容"])),
+    rewrite: text_(value("帖文翻译", 6, ["翻译"])),
+    date: dateText_(row[dateIndex]),
     category: category,
-    likes: row[9], // J 列：点赞排行
-    comments: row[10],
-    shares: row[11],
+    likes: value("点赞", 9),
+    comments: value("评论", 10),
+    shares: value("分享", 11),
     postType: postType,
-    ocr: text_(row[13]),
-    ocrTranslation: text_(row[14]),
-    audioText: text_(row[15]),
-    audioTranslation: text_(row[16]),
-    authorName: authorName,
-    sourceType: text_(row[20]),
-    sourceChannel: text_(row[21]),
-    conversionRate: row[23],
+    ocr: text_(value("OCR", 13)),
+    ocrTranslation: text_(value("OCR翻译", 14)),
+    audioText: text_(value("音频文本", 15)),
+    audioTranslation: text_(value("音频文本翻译", 16)),
+    authorName: pageName,
+    sourceType: text_(value("来源类型", 20)),
+    sourceChannel: "",
+    conversionRate: value("转换率", 23),
     mediaMode: mediaMode,
-    pageName: text_(row[24]),
+    pageName: pageName,
     avatarUrl: avatarUrl,
-    designer: text_(row[27]) // AB 列：美工名字
+    authorId: text_(pageId),
+    designer: text_(value("美工", 27, ["美工名字"]))
   };
+}
+
+function getSourceHeaderMap_(sheet) {
+  const known = ["管理员", "语言", "专页id", "专页名字", "帖文链接", "引流", "帖文ID", "头像", "图片链接", "发帖日期", "点赞", "评论", "分享", "帖文类型", "帖文内容", "帖文翻译", "文案类型", "OCR", "OCR翻译", "图片类型", "音频文本", "音频文本翻译", "题材类型", "来源类型", "缩略图", "交教会", "转换率", "美工"];
+  let best = {};
+  let bestScore = 0;
+  let bestRow = 0;
+  const width = Math.max(1, Math.min(sheet.getLastColumn(), Q_CONFIG.SOURCE_READ_COLS || 28));
+  for (let rowNumber = 1; rowNumber <= Math.min(2, sheet.getLastRow()); rowNumber += 1) {
+    const cells = sheet.getRange(rowNumber, 1, 1, width).getDisplayValues()[0];
+    const map = {};
+    cells.forEach(function(cell, cellIndex) {
+      const key = normalizeSourceHeader_(cell);
+      if (key && map[key] === undefined) map[key] = cellIndex;
+    });
+    const score = known.reduce(function(count, header) {
+      return count + (map[normalizeSourceHeader_(header)] !== undefined ? 1 : 0);
+    }, 0);
+    if (score > bestScore) { best = map; bestScore = score; bestRow = rowNumber; }
+  }
+  best.__headerRow = bestRow;
+  return best;
+}
+
+function getSourceDataStartRow_(sheet) {
+  const headers = getSourceHeaderMap_(sheet);
+  return headers.__headerRow ? headers.__headerRow + 1 : Q_CONFIG.DATA_START_ROW;
+}
+
+function normalizeSourceHeader_(value) {
+  return text_(value).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, "");
+}
+
+function getSourceColumnIndex_(headerMap, header, fallbackIndex, aliases) {
+  const names = [header].concat(aliases || []);
+  for (let i = 0; i < names.length; i += 1) {
+    const index = headerMap && headerMap[normalizeSourceHeader_(names[i])];
+    if (index !== undefined) return index;
+  }
+  return fallbackIndex;
 }
 
 function isValidRecord_(record) {
@@ -1039,7 +1099,7 @@ function getSourceSheet_() {
 }
 
 function getSourceDataRowCount_(source) {
-  return Math.max(0, source.getLastRow() - Q_CONFIG.DATA_START_ROW + 1);
+  return Math.max(0, source.getLastRow() - getSourceDataStartRow_(source) + 1);
 }
 
 function getCacheSheet_() {
@@ -1076,7 +1136,7 @@ function getRefreshState_() {
       running: false,
       runId: "",
       sourceSheet: getSourceSheet_().getName(),
-      nextRow: Q_CONFIG.DATA_START_ROW,
+      nextRow: getSourceDataStartRow_(getSourceSheet_()),
       processed: 0,
       cachedRows: Math.max(0, getCacheSheet_().getLastRow() - 1),
       activeCacheRows: Math.max(0, getCacheSheet_().getLastRow() - 1),
@@ -1117,7 +1177,7 @@ function resetRefreshState_(message) {
     running: false,
     runId: "",
     sourceSheet: source.getName(),
-    nextRow: Q_CONFIG.DATA_START_ROW,
+    nextRow: getSourceDataStartRow_(source),
     processed: 0,
     cachedRows: Math.max(0, cache.getLastRow() - 1),
     activeCacheRows: Math.max(0, cache.getLastRow() - 1),
@@ -1332,27 +1392,33 @@ function buildAnchoredImageMap_(sheet, startRow, rowCount, column) {
   return map;
 }
 
-function getAvatarAccessToken_(sheet) {
-  if (!sheet) return "";
-  try {
-    const formulas = sheet.getRange(1, 20, Math.min(10, sheet.getMaxRows()), 1).getFormulas();
-    for (let row = 0; row < formulas.length; row += 1) {
-      const formula = text_(formulas[row][0]);
-      const match = formula.match(/access_token=([^"&\s,)]+)/i);
-      if (match) return match[1];
-    }
-  } catch (error) {}
-  return "";
-}
-
 function facebookAvatarUrl_(authorId, accessToken) {
-  const id = text_(authorId).replace(/[^\d]/g, "");
+  const id = facebookPageIdFromValue_(authorId);
   if (!id) return "";
   let url = "https://graph.facebook.com/" + encodeURIComponent(id) + "/picture?width=100&height=100";
   if (accessToken) {
     url += "&access_token=" + encodeURIComponent(accessToken);
   }
   return url;
+}
+
+function stripFacebookAccessToken_(value) {
+  const text = text_(value);
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    url.searchParams.delete("access_token");
+    return url.toString();
+  } catch (error) {
+    return text.replace(/([?&])access_token=[^&\s]+&?/ig, function(_match, prefix) { return prefix === "?" ? "?" : ""; });
+  }
+}
+
+function facebookPageIdFromValue_(value) {
+  const text = text_(value).trim();
+  if (/^\d{8,}$/.test(text)) return text;
+  const match = text.match(/(?:facebook\.com|fb\.com)\/(\d{8,})(?:_\d+)?(?:[/?#]|$)/i);
+  return match ? match[1] : "";
 }
 
 function urlFromText_(value) {

@@ -2,7 +2,7 @@
 
 给人和 AI 用的同一份流程。先判断要不要部署，再选方案 A 或方案 B。
 
-相关代码目录：本仓库 `promo-site/`（Cloudflare Pages + Functions + R2）。
+相关代码目录：本仓库 `promo-site/`（Cloudflare Pages + Functions + R2）。  
 桌面软件「发布图库」会 `POST` 到站点的 `/api/publish-cache`。
 
 ---
@@ -254,7 +254,7 @@ npx wrangler pages secret put CACHE_PUBLISH_SECRET --project-name=<PROJECT>
 npx wrangler pages secret put PUBLIC_CACHE_BASE --project-name=<PROJECT>
 ```
 
-`PUBLIC_CACHE_BASE` 填 `https://<R2_PUBLIC_HOST>`（无末尾 `/`）。
+`PUBLIC_CACHE_BASE` 填 `https://<R2_PUBLIC_HOST>`（无末尾 `/`）。  
 接口写进 manifest 的分片 URL 靠这个值。独立站必须设置，否则页面会去读错误的 CDN。
 
 | 变量 | 必填 | 作用 |
@@ -266,6 +266,9 @@ npx wrangler pages secret put PUBLIC_CACHE_BASE --project-name=<PROJECT>
 | `APPS_SCRIPT_API_SECRET` | 否 | 同上 |
 | `DRIVE_CACHE_MANIFEST_URL` | 否 | 旧版 Drive 镜像上游；直推可空 |
 | `PUBLIC_JSON_CACHE_URL` | 否 | 整包 JSON CDN，可选 |
+| `FB_GRAPH_ACCESS_TOKEN` | 头像需要 | Facebook Graph 头像代理的服务端密钥；仅存 Pages Secret，不要放进表格导出 JSON |
+
+若排行榜头像显示首字母/汉字占位，先在 Cloudflare Pages Production 的 **Variables and Secrets** 添加 `FB_GRAPH_ACCESS_TOKEN`（类型选 Secret），保存后部署/更新网站程序。登录网站后打开 `<SITE_HOST>/api/avatar?check=1`：`tokenConfigured: true` 表示站点已读到密钥；`false` 表示还没有设置到当前生产项目。这个检查只返回是否配置，不会显示密钥内容。设置密钥不会改动 R2 素材缓存，因此不需要重新发布整份表格数据。
 
 改密钥后要重新填软件，旧密钥立刻失效。Cloudflare 保存后不再显示原文。
 

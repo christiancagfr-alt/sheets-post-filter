@@ -2024,12 +2024,11 @@
         if (!stats || typeof stats !== "object") return [];
         const changedAssets = [];
         assets.forEach((asset) => {
-          const item = stats[asset.id];
-          if (!item) return;
+          const item = stats[asset.id] || {downloads:0,favorites:0};
           const nextFavorites = Number(item.favorites || 0);
           const nextDownloads = Number(item.downloads || 0);
-          const nextAssignee = item.assignee || "";
-          const nextAssignedAt = item.assignedAt || "";
+          const nextAssignee = item.assignee ?? asset.assignee ?? "";
+          const nextAssignedAt = item.assignedAt ?? asset.assignedAt ?? "";
           if (
             Number(asset.favorites || 0) !== nextFavorites ||
             Number(asset.downloads || 0) !== nextDownloads ||
@@ -2055,10 +2054,10 @@
         if (changedAssets.length) {
           saveBrowserAssetCache().catch((error) => console.warn(error));
           if (!options.silent) els.resultText.textContent = `已同步 ${changedAssets.length} 条领取/统计记录`;
-          if (state.statView === "favorites") {
+          if (state.statView === "favorites" || state.statView === "downloads") {
             renderGalleryPreservingPosition();
           } else {
-            changedAssets.forEach(syncAssetInlineViews);
+            changedAssets.forEach(syncAssetViews);
           }
         }
         return Boolean(changedAssets.length);
@@ -2083,6 +2082,7 @@
           if (isLoginError(error) && token === getToken()) await invalidateLogin();
           throw error;
         }
+        if (assetCacheMeta?.statistics) await syncRemoteStats({silent:true});
         lastCacheCheck = Date.now();
         startCachePolling();
       }
@@ -2110,6 +2110,7 @@
         els.emptyState.classList.remove("is-visible");
         try {
           const nextAssets = [];
+          let pageStats = {};
           let nextCatalog = catalog;
           let nextMeta = null;
           let offset = 0;
@@ -2132,7 +2133,10 @@
             if (data.cacheMeta) nextMeta = data.cacheMeta;
 
             total = Number(data.total || 0);
-            nextAssets.push(...(data.assets || []).map(normalizeAsset));
+            if (data.stats && typeof data.stats === "object") pageStats = data.stats;
+            nextAssets.push(...(data.assets || []).map(item => normalizeAsset({
+              ...item, ...(pageStats[item.id] || {}),
+            })));
             if (page === 0 || page % 10 === 0) {
               setAssets(nextAssets.slice());
               catalog = nextCatalog;
@@ -2246,7 +2250,7 @@
       async function checkVisibleCache() {
         if (!getToken() || document.hidden || cacheCheckInFlight || Date.now()-lastCacheCheck<300000) return;
         cacheCheckInFlight = true; lastCacheCheck = Date.now();
-        try { await checkForCacheUpdate({silent:true}); }
+        try { await checkForCacheUpdate({silent:true}); if (assetCacheMeta?.statistics) await syncRemoteStats({silent:true}); }
         catch(error) { console.warn(error); }
         finally { cacheCheckInFlight = false; }
       }
@@ -2320,7 +2324,7 @@
         const id = String(asset.id || "");
         const type = String(asset.type || "");
         if (id.startsWith("fb_images:") || type.startsWith("FB-")) return "fb_images";
-        if (id.startsWith("wsp_images:") || type.startsWith("示例分类3-")) return "wsp_images";
+        if (id.startsWith("wsp_images:") || type.startsWith("WSP-")) return "wsp_images";
         if (id.startsWith("douyin_effects:") || type === "抖音效果类") return "douyin_effects";
         if (id.startsWith("sp_videos:") || type.startsWith("SP-")) return "sp_videos";
         return "";
@@ -2793,7 +2797,7 @@
               </button>
               <span class="asset-type">${escapeHtml(asset.type)}</span>
               <div class="card-actions">
-                <button class="card-action ${isFavorite ? "is-favorite" : ""}" data-favorite="${escapeHtml(asset.id)}" title="本机收藏" aria-label="本机收藏">
+                <button class="card-action ${isFavorite ? "is-favorite" : ""}" data-favorite="${escapeHtml(asset.id)}" title="收藏 / 取消收藏（显示累计收藏数）" aria-label="收藏 / 取消收藏">
                   ${icon("heart")}<span>${getFavoriteCount(asset)}</span>
                 </button>
                 <a class="card-action" href="${escapeHtml(downloadHref)}" target="assetDownloadFrame" download referrerpolicy="no-referrer" data-download="${escapeHtml(asset.id)}" title="下载" aria-label="下载">
@@ -2989,7 +2993,7 @@
       }
 
       function syncAssetViews(asset) {
-        if (state.statView === "favorites") {
+        if (state.statView === "favorites" || state.statView === "downloads") {
           renderGallery();
         } else {
           syncAssetInlineViews(asset);
@@ -3049,18 +3053,41 @@
           document.body.appendChild(link); link.click(); link.remove();
           if (!drive) setTimeout(() => URL.revokeObjectURL(href), 60000);
         }
-        asset.downloads = Number(asset.downloads || 0) + 1;
-        syncAssetViews(asset);
+        try {
+          const data = await apiPost({action:"download",token:getToken(),id:assetId,client:statsClient()});
+          asset.downloads = data.downloads;
+          asset.favorites = data.favorites;
+          syncAssetViews(asset);
+          await saveBrowserAssetCache();
+        } catch (error) {
+          showError(new Error("下载已发起，但次数未保存，请稍后刷新确认。"));
+        }
+      }
+
+      function statsClient() {
+        const key = "summary-gallery-stats-client-v1";
+        let client = localStorage.getItem(key);
+        if (!/^[a-f0-9]{32}$/.test(client || "")) {
+          client = crypto.randomUUID().replace(/-/g, "");
+          localStorage.setItem(key,client);
+        }
+        return client;
       }
 
       async function toggleFavorite(assetId) {
         const asset = getAssetById(assetId);
-        if (!asset) return;
-        if (state.favorites.has(assetId)) state.favorites.delete(assetId);
-        else state.favorites.add(assetId);
-        asset.favorites = state.favorites.has(assetId) ? 1 : 0;
-        saveState();
-        syncAssetViews(asset);
+        if (!asset || asset.favoritePending) return;
+        asset.favoritePending = true;
+        const active = !state.favorites.has(assetId);
+        try {
+          const data = await apiPost({action:"favorite",token:getToken(),id:assetId,client:statsClient(),active});
+          if (active) state.favorites.add(assetId); else state.favorites.delete(assetId);
+          asset.favorites = data.favorites;
+          asset.downloads = data.downloads;
+          saveState();
+          syncAssetViews(asset);
+          await saveBrowserAssetCache();
+        } finally { asset.favoritePending = false; }
       }
 
       async function assignAsset(assetId, assignee) {
@@ -3239,6 +3266,7 @@
           if (assetsLoading) return;
           resetLoadedGallery(); await clearBrowserAssetCache();
           await loadAssetsPages({force:true, background:false});
+          if (assetCacheMeta?.statistics) await syncRemoteStats({silent:true});
         }
         finally { els.refreshDataBtn.disabled = false; }
       }
@@ -3598,5 +3626,6 @@
 
       init();
     </script>
-  </body>
+  <script defer src="/visit-beacon.js"></script>
+</body>
 </html>

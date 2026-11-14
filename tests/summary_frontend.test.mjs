@@ -162,7 +162,7 @@ test('old Drive view links download originals through the native frame with no W
   f.context.document.createElement=()=>({click(){clicked.push({href:this.href,target:this.target,download:this.download});},remove(){}});
   f.context.document.body={appendChild(){}};
   f.context.fetch=()=>{throw new Error('Drive download must not call the gallery or buffer media');};
-  f.run(`syncAssetViews=()=>{}; setAssets([{id:'drive',title:'原图',downloadUrl:'https://drive.google.com/file/d/abcdefghijk123456/view?resourcekey=key-one',viewUrl:'https://drive.google.com/file/d/abcdefghijk123456/view'}]);`);
+  f.run(`statsClient=()=> '1'.repeat(32); apiPost=async()=>({ok:true,downloads:1,favorites:0}); syncAssetViews=()=>{}; setAssets([{id:'drive',title:'原图',downloadUrl:'https://drive.google.com/file/d/abcdefghijk123456/view?resourcekey=key-one',viewUrl:'https://drive.google.com/file/d/abcdefghijk123456/view'}]);`);
   await f.run(`downloadAsset('drive')`);
   assert.equal(clicked.length,1);
   assert.match(clicked[0].href,/export=download/);
@@ -198,11 +198,72 @@ test('ordinary file hosts download through a browser Blob, and CORS failures nev
   f.context.document.createElement=()=>({click(){clicked.push({href:this.href,download:this.download});},remove(){}});
   f.context.document.body={appendChild(){}};
   f.context.fetch=async url=>{requests.push(url);return {ok:true,headers:{get:()=> 'image/jpeg'},blob:async()=>({})};};
-  f.run(`syncAssetViews=()=>{}; setAssets([{id:'other',title:'原图',viewUrl:'https://files.example.com/image.jpg'}]);`);
+  f.run(`statsClient=()=> '1'.repeat(32); apiPost=async()=>({ok:true,downloads:1,favorites:0}); syncAssetViews=()=>{}; setAssets([{id:'other',title:'原图',viewUrl:'https://files.example.com/image.jpg'}]);`);
   await f.run(`downloadAsset('other')`);
   assert.deepEqual(requests,['https://files.example.com/image.jpg']);
   assert.deepEqual(clicked,[{href:'blob:local-fixture',download:'原图.jpg'}]);
   f.context.fetch=async()=>{throw new Error('CORS');};
   await assert.rejects(f.run(`downloadAsset('other')`),/不允许网页下载/);
   assert.equal(clicked.length,1);
+});
+
+test('favorites use server totals and failed writes preserve local state',async()=>{
+  const f=frontend();
+  f.run(`setAssets([{id:'one',favorites:4,downloads:7}]); statsClient=()=> '1'.repeat(32);
+    syncAssetViews=saveState=()=>{}; apiPost=async()=>({favorites:5,downloads:7});`);
+  await f.run("toggleFavorite('one')");
+  assert.equal(f.run('assets[0].favorites'),5);
+  assert.equal(f.run("state.favorites.has('one')"),true);
+  f.run(`apiPost=async()=>{throw new Error('offline');};`);
+  await assert.rejects(f.run("toggleFavorite('one')"),/offline/);
+  assert.equal(f.run('assets[0].favorites'),5);
+  assert.equal(f.run("state.favorites.has('one')"),true);
+});
+test('statistics clear stale counts without clearing assignee data',()=>{
+  const f=frontend();
+  f.run(`setAssets([{id:'one',favorites:4,downloads:7,assignee:'示例'}]);applyStatsMap({});`);
+  assert.equal(f.run('assets[0].favorites'),0);
+  assert.equal(f.run('assets[0].downloads'),0);
+  assert.equal(f.run('assets[0].assignee'),'示例');
+});
+
+test('opening a cached gallery refreshes server statistics even when the build is unchanged',async()=>{
+  const first=frontend(),storage=localDatabase(first);cacheApi(first);
+  await first.run('loadRemoteData()');await first.run('browserCacheWrite');
+  const next=frontend();localDatabase(next,storage);const calls=[];
+  next.run('renderNav=renderFilters=renderGalleryPreservingPosition=syncAssetViews=()=>{};');
+  next.context.fetch=async(_url,request)=>{
+    const body=JSON.parse(request.body);calls.push(body.action);
+    const data=body.action==='stats'?{ok:true,stats:{one:{downloads:9,favorites:3}}}:
+      {ok:true,cacheMeta:{statistics:true,cacheKey:'build:2026-10-30',total:1}};
+    return {ok:true,text:async()=>JSON.stringify(data)};
+  };
+  await next.run('loadRemoteData()');
+  assert.deepEqual(calls,['cacheMeta','stats']);
+  assert.equal(next.run('assets[0].downloads'),9);
+  assert.equal(next.run('assets[0].favorites'),3);
+});
+
+test('first-page statistics render immediately and survive later pages without waiting for full loading',async()=>{
+  const f=frontend();let releaseSecond;const rendered=[];
+  f.run(`renderNav=renderFilters=()=>{}; renderGalleryPreservingPosition=()=>{};`);
+  f.context.capture=()=>rendered.push(f.run('assets.map(a=>({id:a.id,favorites:a.favorites,downloads:a.downloads}))'));
+  f.run('renderGalleryPreservingPosition=capture;');
+  f.context.fetch=async(_url,request)=>{
+    const body=JSON.parse(request.body);
+    const meta={statistics:true,cacheKey:'same-build',total:2};
+    if(body.cursor) await new Promise(resolve=>{releaseSecond=resolve;});
+    const data=body.cursor?{ok:true,assets:[{id:'two'}],cacheMeta:meta,total:2,hasMore:false,nextOffset:null}:
+      {ok:true,assets:[{id:'one'}],stats:{one:{downloads:8,favorites:2},two:{downloads:3,favorites:1}},
+       cacheMeta:meta,total:2,hasMore:true,nextOffset:1,nextCursor:'second'};
+    return {ok:true,text:async()=>JSON.stringify(data)};
+  };
+  const loading=f.run('loadAssetsPages()');
+  while(!releaseSecond) await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.run('assetsLoaded'),false);
+  assert.equal(rendered[0][0].favorites,2);
+  assert.equal(rendered[0][0].downloads,8);
+  releaseSecond();await loading;
+  assert.equal(f.run('assets[1].favorites'),1);
+  assert.equal(f.run('assets[1].downloads'),3);
 });

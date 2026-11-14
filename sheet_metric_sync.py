@@ -995,3 +995,4 @@ def run_sheet_metric_sync(cfg, *, preview=False, log=print, cancelled=None):
                 f"同步失败，且原始值恢复未完成。请先检查目标表再重跑。恢复错误：{restore_error}"
             ) from exc
         raise
+

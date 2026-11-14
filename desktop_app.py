@@ -739,7 +739,13 @@ class DesktopApp(tk.Tk):
     def _wheel_page(self, event):
         """Scroll forms even when the pointer is over a label or entry."""
         widget = event.widget
-        if isinstance(widget, (tk.Text, tk.Listbox, ttk.Combobox)):
+        if isinstance(widget, ttk.Combobox):
+            # Combobox must be focused before wheel input can change/scroll its options.
+            # This prevents a page scroll over an untouched dropdown from changing values.
+            if widget == self.focus_get():
+                return None
+            return "break"
+        if isinstance(widget, (tk.Text, tk.Listbox)):
             return
         while widget is not None:
             if any(widget is page._inner for page in self._scroll_pages):
@@ -1175,7 +1181,7 @@ class DesktopApp(tk.Tk):
     def _apply_selected_menu(self, item: dict) -> None:
         template = item.get("template") or "filter"
         settings = item.get("settings") or {}
-        if self._page_settings.get(template) != settings:
+        if template == "filter" or self._page_settings.get(template) != settings:
             self._suspend_layout()
             try:
                 self._apply_settings_slice(settings, template)
@@ -1777,12 +1783,18 @@ class DesktopApp(tk.Tk):
                 self._add_vd_extra_col(str(item.get("field") or "分类"), column)
 
     def _build_filter(self, p) -> None:
-        c1 = self._card(p, "1. 数据源表格链接", "只换链接，列范围相同", collapsed=True)
-        self._note(c1, "每个源表都是同一套表头。分组名可选，用来写进汇总结果。")
+        c1 = self._card(p, "1. 数据源表格链接", "选择执行方式，共用下方数据源", collapsed=False)
+        self.var_cf_mode = tk.StringVar(value="merged")
+        mode_row = tk.Frame(c1, bg=C["card"])
+        mode_row.pack(fill="x", pady=6)
+        for value, label in (("direct", "直接读取发布"), ("merged", "筛选汇总")):
+            ttk.Radiobutton(mode_row, text=label, variable=self.var_cf_mode, value=value,
+                            command=self._filter_mode_changed).pack(side="left", padx=(0, 16))
+        self._note(c1, "两种方式共用下面的链接和表头映射。直接发布读取全部数据，不执行筛选或写入汇总表。")
         box, count, _ph = self._src_table(c1, ["分组（可选）", "表格链接"], "+ 添加数据源", "_src_rows", "例如：分组A")
         self.src_box, self.src_count = box, count
         self.var_add_source_column = tk.BooleanVar(value=True)
-        self._check(c1, "把「分组」写到 AC 列（不占用 A 列）", self.var_add_source_column)
+        self._check(c1, "把「分组」追加到源表字段之后", self.var_add_source_column)
 
         c2 = self._card(p, "2. 日期与点赞过滤")
         self.var_start = tk.StringVar()
@@ -1829,7 +1841,7 @@ class DesktopApp(tk.Tk):
         self._check(box, "写入表头", self.var_hot_include_headers)
 
         c4 = self._card(p, "4. 发布到 Cloudflare", "密钥等少改，点标题展开", collapsed=True)
-        self._note(c4, "发布请用顶部「发布图库」。这里只改地址和密钥。数据和上次相同会跳过。")
+        self._note(c4, "执行方式在第一个数据源区域选择。直接发布共用上方链接和表头映射；数据相同会跳过。")
         self.var_cf_url = tk.StringVar()
         self.var_cf_secret = tk.StringVar()
         self._entry(c4, "发布地址（例如 https://gallery.example.com/api/publish-cache）", self.var_cf_url)
@@ -1865,20 +1877,18 @@ class DesktopApp(tk.Tk):
         self.sched_info = tk.Label(c5, text="定时未启动", bg=C["card"], fg=C["muted"], font=FS)
         self.sched_info.pack(anchor="w", pady=4)
 
-        c6 = self._card(p, "6. 抓取字段", "可改列范围", collapsed=True)
-        self._note(c6, "填写源表工作表名和列范围。以后换列，改这里即可。")
-        fh = tk.Frame(c6, bg="#e8eef7")
-        fh.pack(fill="x")
-        for t, w in (("字段名", 16), ("工作表", 16), ("范围", 16)):
-            tk.Label(fh, text=t, bg="#e8eef7", font=FS, fg=C["muted"], width=w, anchor="w").pack(side="left", padx=4, pady=4)
-        self.field_box = tk.Frame(c6, bg=C["card"])
-        self.field_box.pack(fill="x")
-        self.field_count = tk.Label(c6, text="0 列", bg=C["card"], fg=C["muted"], font=FS)
-        self.field_count.pack(anchor="w", pady=4)
-        fr = tk.Frame(c6, bg=C["card"])
-        fr.pack(anchor="w")
-        StyleBtn(fr, "ghost", text="+ 添加字段", command=lambda: self._add_field({})).pack(side="left")
-        StyleBtn(fr, "ghost", text="恢复默认字段", command=self._reset_fields).pack(side="left", padx=6)
+        self.var_filter_source_sheet = tk.StringVar()
+        self.var_filter_header_row = tk.StringVar(value="1")
+        self._entry(c1, "子表名称（链接带 gid 时可留空）", self.var_filter_source_sheet)
+        self._entry(c1, "表头行", self.var_filter_header_row)
+        self.filter_load_button = StyleBtn(c1, "ghost", text="读取表头，自动生成映射", command=self._load_filter_headers)
+        self.filter_load_button.pack(anchor="w", pady=6)
+        self._note(c1, "源表头 → 目标字段：自动识别标准字段，也可修改右侧名称；不修改源表。修改源表后请重新读取。")
+        self.filter_mapping_box = tk.Frame(c1, bg=C["card"])
+        self.filter_mapping_box.pack(fill="x")
+        self._filter_mapping_vars = []
+        self._filter_merge_cards = [c2.master, c3.master, c5.master]
+        self._filter_publish_card = c4.master
 
         c7 = self._card(p, "高级选项", collapsed=True)
         self.var_exclude = tk.StringVar(value="未找到")
@@ -1894,54 +1904,65 @@ class DesktopApp(tk.Tk):
         StyleBtn(cred_line, "ghost", text="选择文件…", command=self._choose_credentials).pack(side="left", padx=(8, 0))
         g = self._row3(c7)
         self._cell(g, 0, "排除帖文id", self.var_exclude)
-        self._cell(g, 1, "日期字段", self.var_date_field)
-        self._cell(g, 2, "排序字段", self.var_sort_field)
+        self._note(c7, "日期按「发帖日期」筛选，互动数按「点赞」排序。")
         self._check(c7, "降序排列", self.var_sort_desc)
+        self._filter_merge_cards.append(c7.master)
 
-    def _add_field(self, item):
-        row = tk.Frame(self.field_box, bg=C["card"])
-        row.pack(fill="x", pady=3)
-        n = self._input(row, font=MONO, width=16)
-        n.insert(0, (item or {}).get("name") or "")
-        n.pack(side="left", ipady=4, padx=(0, 6))
-        s = self._input(row, font=MONO, width=16)
-        s.insert(0, (item or {}).get("sheet") or "源数据")
-        s.pack(side="left", ipady=4, padx=(0, 6))
-        r = self._input(row, font=MONO, width=16)
-        r.insert(0, (item or {}).get("range") or "")
-        r.pack(side="left", ipady=4, padx=(0, 6))
-        StyleBtn(row, "ghost", text="删除", command=lambda: self._del_field(row)).pack(side="left")
-        row._name, row._sheet, row._range = n, s, r
-        self._field_rows.append(row)
-        self._upd_fields()
+    def _filter_mode_changed(self):
+        if not hasattr(self, '_filter_merge_cards'): return
+        self.btn_run.configure(text='直接读取并发布' if self.var_cf_mode.get() == 'direct' else '开始汇总')
+        for card in self._filter_merge_cards:
+            if self.var_cf_mode.get() == 'direct': card.pack_forget()
+            else: card.pack(fill='x', padx=16, pady=(0, 12), before=self._filter_publish_card)
 
-    def _del_field(self, row):
-        if row in self._field_rows:
-            self._field_rows.remove(row)
-        row.destroy()
-        if not self._field_rows:
-            self._add_field({})
-        self._upd_fields()
+    def _fill_filter_mappings(self, mappings):
+        from publish_cloudflare import HEADER_TO_ASSET
+        for widget in self.filter_mapping_box.winfo_children(): widget.destroy()
+        self._filter_mapping_vars = []
+        headings = tk.Frame(self.filter_mapping_box, bg=C['card'])
+        headings.pack(fill='x', pady=(2, 4))
+        headings.grid_columnconfigure(0, weight=1, uniform='filter-map')
+        headings.grid_columnconfigure(1, weight=1, uniform='filter-map')
+        tk.Label(headings, text='源表头', bg=C['card'], fg=C['muted'], anchor='w').grid(row=0, column=0, sticky='ew', padx=(0, 8))
+        tk.Label(headings, text='映射列', bg=C['card'], fg=C['muted'], anchor='w').grid(row=0, column=1, sticky='ew', padx=(8, 0))
+        for item in mappings:
+            row = tk.Frame(self.filter_mapping_box, bg=C['card'])
+            row.pack(fill='x', pady=2)
+            row.grid_columnconfigure(0, weight=1, uniform='filter-map')
+            row.grid_columnconfigure(1, weight=1, uniform='filter-map')
+            source = str(item.get('source') or '')
+            # Keep source header (including its emoji/icon) intact in one left cell.
+            tk.Label(row, text=source, bg=C['card'], fg=C['ink'], anchor='w', justify='left').grid(row=0, column=0, sticky='ew', padx=(0, 8), pady=(0, 6))
+            target = tk.StringVar(value=item.get('target') or source)
+            combo = ttk.Combobox(row, textvariable=target, values=list(HEADER_TO_ASSET))
+            combo.grid(row=0, column=1, sticky='ew', padx=(8, 0), pady=(0, 6))
+            self._filter_mapping_vars.append({'source': source, 'target': target})
 
-    def _reset_fields(self):
-        for r in list(self._field_rows):
-            r.destroy()
-        self._field_rows = []
-        for f in copy_default_fields():
-            self._add_field(f)
-
-    def _upd_fields(self):
-        n = sum(1 for r in self._field_rows if r._name.get().strip() and r._range.get().strip())
-        self.field_count.configure(text=f"{n} 列")
-
-    def _read_fields(self):
-        out = []
-        for r in self._field_rows:
-            name = r._name.get().strip()
-            rng = r._range.get().strip()
-            if name and rng:
-                out.append({"name": name, "sheet": r._sheet.get().strip() or "源数据", "range": rng})
-        return out
+    def _load_filter_headers(self):
+        cfg = self._cfg_for_action()
+        menu_id = self._active_menu_id
+        self.filter_load_button.configure(state='disabled')
+        def done(mappings=None, error=None):
+            self.filter_load_button.configure(state='normal')
+            if error:
+                messagebox.showerror('读取表头失败', error, parent=self)
+                return
+            if self._active_menu_id == menu_id:
+                self._fill_filter_mappings(mappings)
+                item = next((row for row in self._menus if row['id'] == menu_id), None)
+                if item: item.setdefault('settings', {})['filter_header_mappings'] = mappings
+                self._save(quiet=True)
+            else:
+                menu = next((m for m in self._menus if m['id'] == menu_id), None)
+                if menu: menu['settings']['filter_header_mappings'] = mappings
+        def work():
+            try:
+                from publish_cloudflare import peek_filter_headers
+                mappings = peek_filter_headers(cfg)
+                self.after(0, lambda: done(mappings))
+            except Exception as exc:
+                self.after(0, lambda error=str(exc): done(error=error))
+        threading.Thread(target=work, daemon=True).start()
 
     def _build_worksheet_merge(self, p) -> None:
         defaults = asdict(Config())
@@ -3311,7 +3332,7 @@ class DesktopApp(tk.Tk):
         tk.Label(gallery, text="图库站点（Cloudflare）", bg=C["card"], fg=C["ink"], font=FB).pack(anchor="w", padx=14, pady=(12, 4))
         tk.Label(
             gallery,
-            text="部署结果只写入左侧当前选中的模板第 4 步。要给新模板单独一座站：先新增并点选该模板，再换域名部署。换回旧域名后点「填入此域名的密钥」，会把以前缓存的地址和密钥写回当前模板。旧模板不会被改掉。",
+            text="先选择左侧配置，再打开网站管理。一键部署会按配置类型创建独立网站、生成发布密钥并自动绑定；已有网站可更新、修改密码和查看访问分析。",
             bg=C["card"],
             fg=C["muted"],
             font=FS,
@@ -3325,21 +3346,11 @@ class DesktopApp(tk.Tk):
         StyleBtn(login_row, "ghost", text="1. 登录 Cloudflare", command=self._cf_login).pack(side="left")
         StyleBtn(login_row, "ghost", text="多账号与发布范围", command=self._manage_cf_accounts).pack(side="left", padx=8)
         self.var_cf_host = tk.StringVar()
-        self._entry(gallery, "2. 网站域名（例如 gallery.example.com）", self.var_cf_host)
         self.var_cf_access_password = tk.StringVar()
-        self._entry(
-            gallery,
-            "访问密码（修改 / 重置请打开“多账号与发布范围”中的独立密码按钮）",
-            self.var_cf_access_password,
-            show="•",
-        )
         deploy_row = tk.Frame(gallery, bg=C["card"])
         deploy_row.pack(fill="x", padx=14, pady=(4, 8))
-        self.btn_cf_deploy = StyleBtn(deploy_row, "primary", text="3. 管理 / 连接站点", command=self._manage_cf_accounts)
+        self.btn_cf_deploy = StyleBtn(deploy_row, "primary", text="一键部署 / 网站管理 / 访问分析", command=self._manage_cf_accounts)
         self.btn_cf_deploy.pack(side="left")
-        StyleBtn(deploy_row, "ghost", text="填入此域名的密钥", command=self._restore_cf_site_for_host).pack(
-            side="left", padx=(8, 0)
-        )
         StyleBtn(deploy_row, "ghost", text="关闭", command=_on_close_settings).pack(side="right")
         self.var_cf_deploy_status = tk.StringVar(value="")
         tk.Label(
@@ -3413,7 +3424,7 @@ class DesktopApp(tk.Tk):
         dlg.geometry(f"+{parent.winfo_rootx() + 40}+{parent.winfo_rooty() + 80}")
         tk.Label(
             dlg,
-            text="浏览器会打开 Cloudflare 令牌页（权限已预填）。\n确认包含：Pages 编辑、R2 编辑、Workers Scripts 编辑、\nDNS 编辑、Account 读取；账号选全部、区域选全部。\n点 Create Token 后，把 API Token 粘贴到下面（不要粘 Global API Key）。",
+            text="浏览器会打开 Cloudflare 令牌页（权限已预填）。\n确认包含：Pages 编辑、R2 编辑、Workers Scripts 编辑、\nDNS 编辑、Account Settings 与 Account Analytics 读取；账号选全部、区域选全部。\n点 Create Token 后，把 API Token 粘贴到下面（不要粘 Global API Key）。首次使用若提示 R2 未开通，需账号所有者先在 Cloudflare 控制台启用 R2。",
             bg=C["paper"],
             fg=C["ink"],
             font=FS,
@@ -3938,6 +3949,7 @@ class DesktopApp(tk.Tk):
             "cf_publish_url": self.var_cf_url.get().strip(),
             "cf_publish_secret": self.var_cf_secret.get().strip(),
             "cf_publish_source": self.var_cf_source.get().strip() or "all",
+            "cf_publish_mode": self.var_cf_mode.get().strip(),
             "include_headers": self.var_include_headers.get(),
             "hot_include_headers": self.var_hot_include_headers.get(),
             "add_source_column": self.var_add_source_column.get(),
@@ -3949,7 +3961,9 @@ class DesktopApp(tk.Tk):
             "schedule_only_if_changed": self.var_changed.get(),
             "cf_publish_after_sync": self.var_cf_after.get(),
             "sources": self._read_src("_src_rows"),
-            "fields": self._read_fields(),
+            "filter_source_sheet": self.var_filter_source_sheet.get().strip(),
+            "filter_header_row": self.var_filter_header_row.get().strip(),
+            "filter_header_mappings": [{"source": item["source"], "target": item["target"].get().strip()} for item in self._filter_mapping_vars],
         }
 
     def _apply_settings_slice(self, settings: dict, template: str) -> None:
@@ -4119,6 +4133,7 @@ class DesktopApp(tk.Tk):
         self._set_str(self.var_cf_url, s.get("cf_publish_url"))
         self._set_str(self.var_cf_secret, s.get("cf_publish_secret"))
         self._set_str(self.var_cf_source, s.get("cf_publish_source"), "all")
+        self._set_str(self.var_cf_mode, s.get("cf_publish_mode"), "merged")
         self._set_bool(self.var_cf_after, s.get("cf_publish_after_sync"), True)
         self._set_str(self.var_minutes, s.get("schedule_minutes"), "1440")
         self._set_bool(self.var_sched, s.get("schedule_enabled"))
@@ -4128,19 +4143,11 @@ class DesktopApp(tk.Tk):
         self._set_str(self.var_sort_field, s.get("sort_field"), "点赞")
         self._set_bool(self.var_sort_desc, s.get("sort_descending"), True)
         self._set_src(self.src_box, "_src_rows", "例如：分组A", self.src_count, s.get("sources") or s.get("source_urls"))
-        wanted = s.get("fields") or copy_default_fields()
-        if len(self._field_rows) != len(wanted):
-            for row in list(self._field_rows):
-                row.destroy()
-            self._field_rows = []
-            for field in wanted:
-                self._add_field(field)
-        else:
-            for row, field in zip(self._field_rows, wanted):
-                if isinstance(field, dict):
-                    self._fill_entry(row._name, str(field.get("name") or ""))
-                    self._fill_entry(row._sheet, str(field.get("sheet") or ""))
-                    self._fill_entry(row._range, str(field.get("range") or ""))
+        self._set_str(self.var_filter_source_sheet, s.get("filter_source_sheet"))
+        self._set_str(self.var_filter_header_row, s.get("filter_header_row"), "1")
+        self._fill_filter_mappings(s.get('filter_header_mappings') or [])
+        self._filter_mode_changed()
+
 
     def _payload(self) -> dict:
         return asdict(self.cfg)
@@ -4201,7 +4208,7 @@ class DesktopApp(tk.Tk):
             messagebox.showwarning("数据汇总工具", err)
             return
         self._log_n = 0
-        self._append_log("筛选汇总已加入队列")
+        self._append_log("直接发布已加入队列" if cfg.cf_publish_mode == "direct" else "筛选汇总已加入队列")
         self._set_badge("排队中", C["accent"])
 
     def _run_align(self) -> None:
@@ -4329,6 +4336,11 @@ class DesktopApp(tk.Tk):
         }
         queued = 0
         self._store_current_menu_settings()
+        active_item = next((item for item in self._menus if item["id"] == self._active_menu_id), None)
+        if active_item and active_item.get("template") == "filter" and (active_item.get("settings") or {}).get("cf_publish_mode") == "direct":
+            if self._menu_checks.get(active_item["id"], tk.BooleanVar(value=False)).get():
+                self._run_now()
+                return
         for item in self._menus:
             if not self._menu_checks.get(item["id"], tk.BooleanVar(value=False)).get():
                 continue
@@ -4339,6 +4351,11 @@ class DesktopApp(tk.Tk):
             cfg.ui_archived_menus = copy.deepcopy(self.cfg.ui_archived_menus)
             self._apply_creds_to_cfg(cfg)
             fn = starters.get(item["template"])
+            if item["template"] == "filter" and cfg.cf_publish_mode == "direct":
+                if item["id"] == self._active_menu_id:
+                    self._run_now()
+                    return
+                continue
             if not fn:
                 continue
             err = fn(cfg)

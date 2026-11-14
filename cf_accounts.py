@@ -64,11 +64,11 @@ def require_menu(profile_id, menu_id):
 def site_for_menu(profile_id, menu_id, host, *, kind=None):
     profile = require_menu(profile_id, menu_id)
     host = normalize_host(host)
-    site = next((item for item in known_gallery_sites(load_cf_state()) if item['host'] == host), None)
+    site = next((item for item in known_gallery_sites(load_cf_state()) if host in {item['host'], urlsplit(item.get('pages_url') or '').hostname, urlsplit(item.get('site_url') or '').hostname}), None)
     if not site or site.get('account_id') != profile['account_id']:
         raise ValueError('该域名不属于所选账号的已记录站点，请先在账号管理中部署或选择正确站点')
     if kind and site.get('kind', 'promo') != kind:
-        raise ValueError('该域名的站点类型与当前汇总模板不匹配，请选择多工作表图库站点')
+        raise ValueError('该域名的站点类型与当前模板不匹配，请选择' + ('多工作表图库站点' if kind == 'summary' else '贴文图库站点'))
     return profile, site
 
 

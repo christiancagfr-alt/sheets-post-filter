@@ -63,7 +63,6 @@ const els = {
   dateEnd: document.getElementById("dateEnd"),
   categoryFilter: document.getElementById("categoryFilter"),
   sourceTypeFilter: document.getElementById("sourceTypeFilter"),
-  sourceChannelFilter: document.getElementById("sourceChannelFilter"),
   postTypeFilter: document.getElementById("postTypeFilter"),
   minLikes: document.getElementById("minLikes"),
   minComments: document.getElementById("minComments"),
@@ -92,7 +91,6 @@ const state = {
     dateEnd: "",
     category: "",
     sourceType: "",
-    sourceChannel: "",
     postType: "",
     minLikes: "",
     minComments: "",
@@ -244,7 +242,6 @@ function bindEvents() {
     ["dateEnd", els.dateEnd],
     ["category", els.categoryFilter],
     ["sourceType", els.sourceTypeFilter],
-    ["sourceChannel", els.sourceChannelFilter],
     ["postType", els.postTypeFilter],
     ["minLikes", els.minLikes],
     ["minComments", els.minComments],
@@ -312,7 +309,6 @@ function syncFilterControls() {
   els.dateEnd.value = state.filters.dateEnd;
   els.categoryFilter.value = state.filters.category;
   els.sourceTypeFilter.value = state.filters.sourceType;
-  els.sourceChannelFilter.value = state.filters.sourceChannel;
   els.postTypeFilter.value = state.filters.postType;
   els.minLikes.value = state.filters.minLikes;
   els.minComments.value = state.filters.minComments;
@@ -349,64 +345,21 @@ async function loadLocalCache() {
   rebuildCatalogs();
 }
 
-/**
- * 把 Drive 最新 Manifest 镜像到 R2 CDN（管理员操作，耗配额）
- * 成功后自动再「同步」到本机 IndexedDB
- */
+/** Reload the already-published R2 manifest. This does not mirror from Drive. */
 async function refreshCdnCache() {
-  const confirmed = window.confirm(
-    "【请谨慎点击】刷新 CDN 会：\n\n" +
-      "1. 从 Google Drive 重新下载全部分片（消耗 Drive 流量/配额）\n" +
-      "2. 写入 Cloudflare R2（消耗 Worker 子请求）\n" +
-      "3. 默认 30 分钟内只能成功刷新 1 次\n\n" +
-      "适用：表格已重新导出 Manifest 后更新网站数据。\n" +
-      "日常只看数据请点「同步」，不要点本按钮。\n\n" +
-      "确定要刷新 CDN 吗？"
-  );
-  if (!confirmed) {
-    appendStatusLog("已取消刷新 CDN");
-    return;
-  }
-
   if (els.refreshCdnBtn) els.refreshCdnBtn.disabled = true;
-  setStatus("正在刷新 CDN（可能需要 1～3 分钟）…");
-  appendStatusLog("CDN 刷新开始：Drive Manifest → R2");
-
+  setStatus("正在读取当前 Cloudflare JSON 缓存…");
+  appendStatusLog("重新读取已发布的 R2 Manifest；不会访问 Drive，也不会写入 CDN");
   try {
-    const response = await fetch("/api/refresh-cdn", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        manifestUrl:
-          window.Q_GALLERY_DRIVE_FALLBACK_MANIFEST_URL ||
-          window.Q_GALLERY_DRIVE_CACHE_MANIFEST_URL ||
-          ""
-      })
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data.ok === false) {
-      throw new Error(data.error || `刷新失败 HTTP ${response.status}`);
-    }
-
-    const msg =
-      `CDN 已更新：${data.mirroredAssets || data.totalRows || "?"} 条 / ${data.chunkCount || "?"} 分片` +
-      (data.buildId ? `（build ${String(data.buildId).slice(0, 8)}…）` : "");
-    setStatus(msg);
-    appendStatusLog(msg);
-    if (data.quotaNote) appendStatusLog(data.quotaNote);
-    appendStatusLog("正在把 CDN 新数据同步到本机…");
-    await syncSharedCache({ reset: true, maxPages: Infinity, quiet: false });
-  } catch (error) {
-    setStatus(error.message || "刷新 CDN 失败", true);
-    appendStatusLog(error.message || "刷新 CDN 失败");
+    const loaded = await syncSharedCache({ reset: true, maxPages: Infinity, quiet: false });
+    if (loaded) appendStatusLog("Cloudflare JSON 缓存读取完成");
   } finally {
     if (els.refreshCdnBtn) els.refreshCdnBtn.disabled = false;
   }
 }
 
 async function syncSharedCache({ reset = false, maxPages = Infinity, quiet = false } = {}) {
-  if (state.syncRunning) return;
+  if (state.syncRunning) return false;
   state.syncRunning = true;
 
   try {
@@ -422,9 +375,11 @@ async function syncSharedCache({ reset = false, maxPages = Infinity, quiet = fal
           "请在表格运行 qGalleryExportDriveCacheManifest，然后点「JSON同步」粘贴新的 Manifest URL；或使用 CSV 导入。"
       );
     }
+    return true;
   } catch (error) {
     setStatus(error.message || "同步失败。", true);
     appendStatusLog(error.message || "同步失败");
+    return false;
   } finally {
     state.syncRunning = false;
   }
@@ -462,7 +417,7 @@ async function syncSharedCacheSnapshot(quiet = false) {
   }
   if (!quiet) {
     appendStatusLog(
-      "若 CDN/Drive 均失败：在表格运行 qGalleryExportDriveCacheManifest，再 POST /api/publish-cache 镜像到 R2，或点「JSON同步」。"
+      "若 Cloudflare Manifest/分片不可用，请检查站点登录状态和发布的 R2 数据；也可用「JSON同步」导入 Manifest，或 CSV 导入。"
     );
   }
 
@@ -737,14 +692,17 @@ async function fetchCacheSnapshotFromUrl(cacheUrl) {
   const url = normalizeCacheUrl(cacheUrl);
   // CDN / 同站 / r2.dev：浏览器直读，不经 Worker（与素材库一致，减配额）
   const isCdn =
-    /zhixianglife\.com|r2\.dev|cloudflarestorage\.com|pages\.dev/i.test(url) ||
-    url.startsWith("/");
+    /r2\.dev|cloudflarestorage\.com|pages\.dev/i.test(url) ||
+    url.startsWith("/") ||
+    new URL(url, window.location.href).origin === window.location.origin;
   const separator = url.includes("?") ? "&" : "?";
   const finalUrl = isCdn ? url : `${url}${separator}t=${encodeURIComponent(Date.now())}`;
   try {
     const response = await fetch(finalUrl, {
       cache: isCdn ? "default" : "no-store",
-      credentials: "omit",
+      credentials: new URL(finalUrl, window.location.href).origin === window.location.origin
+        ? "same-origin"
+        : "omit",
       mode: "cors"
     });
     if (!response.ok) throw new Error(`共享缓存下载失败：${response.status}`);
@@ -1080,144 +1038,64 @@ function parseCsv(text) {
 function csvRowsToRecords(rows) {
   if (!rows.length) return [];
   const aliases = csvHeaderAliases();
-  const firstRow = rows[0].map(normalizeCsvHeader);
-  const hasHeader = firstRow.some(header => header && aliases[header]);
-  const dataRows = hasHeader ? rows.slice(1) : rows;
-  const fieldIndexes = {};
-
-  if (hasHeader) {
-    firstRow.forEach((header, index) => {
-      const field = aliases[header];
-      if (field && fieldIndexes[field] === undefined) fieldIndexes[field] = index;
-    });
-  }
-
-  return dataRows.map((row, index) => {
-    const rowNumber = hasHeader ? index + 2 : index + 1;
-    const value = (key, fallbackIndex) => {
-      const headerIndex = fieldIndexes[key];
-      return (headerIndex !== undefined ? row[headerIndex] : "") || row[fallbackIndex] || "";
-    };
-    const postType = value("postType", 12);
-    const category = value("category", 8);
-
-    return {
-      id: value("id", -1),
-      rowNumber: value("rowNumber", -1) || rowNumber,
-      name: value("name", 0),
-      postId: value("postId", 1),
-      postLink: extractUrl(value("postLink", 2)) || value("postLink", 2),
-      lead: value("lead", 3),
-      water: value("water", 25),
-      waterTime: value("waterTime", 26),
-      thumbnailUrl: extractUrl(value("thumbnailUrl", 4)) || value("thumbnailUrl", 4),
-      thumbnailFallbackUrl: extractUrl(value("thumbnailFallbackUrl", 22)) || value("thumbnailFallbackUrl", 22),
-      content: value("content", 5),
-      rewrite: value("rewrite", 6),
-      date: value("date", 7),
-      category,
-      likes: value("likes", 9), // J 列
-      designer: value("designer", 27), // AB 列：美工
-      comments: value("comments", 10),
-      shares: value("shares", 11),
-      postType,
-      ocr: value("ocr", 13),
-      ocrTranslation: value("ocrTranslation", 14),
-      audioText: value("audioText", 15),
-      audioTranslation: value("audioTranslation", 16),
-      authorName: value("authorName", 17),
-      avatarUrl: extractUrl(value("avatarUrl", 19)) || value("avatarUrl", 19),
-      sourceType: value("sourceType", 20),
-      sourceChannel: value("sourceChannel", 21),
-      conversionRate: value("conversionRate", 23),
-      mediaMode: value("mediaMode", -1) || (isImportedVideo(postType, category) ? "video" : "image"),
-      pageName: value("pageName", 24)
-    };
+  const indexes = {};
+  rows[0].forEach((header, index) => {
+    const field = aliases[normalizeCsvHeader(header)];
+    if (!field) return;
+    if (indexes[field] !== undefined) throw new Error("存在重复表头，请检查表格");
+    indexes[field] = index;
   });
+  if (indexes.postLink === undefined) throw new Error("缺少必需表头「帖文链接」，不再按旧列位置读取");
+  return rows.slice(1).map((row,index) => {
+    const record = {rowNumber:index+2};
+    Object.entries(indexes).forEach(([field,column]) => {record[field]=row[column] ?? "";});
+    record.postLink = extractUrl(record.postLink);
+    record.thumbnailUrl = extractUrl(record.thumbnailUrl) || extractUrl(record.imageUrl);
+    record.thumbnailFallbackUrl = extractUrl(record.imageUrl) || record.thumbnailUrl;
+    record.avatarUrl = extractUrl(record.avatarUrl);
+    record.mediaMode = isImportedVideo(record.postType,record.category) ? "video" : "image";
+    return record;
+  }).filter(record => /^https?:\/\//i.test(record.postLink));
 }
 
 function csvHeaderAliases() {
   return {
-    id: "id",
-    rownumber: "rowNumber",
-    row: "rowNumber",
-    行号: "rowNumber",
-    名字: "name",
-    名称: "name",
-    name: "name",
-    postid: "postId",
-    帖文id: "postId",
-    帖子id: "postId",
-    postlink: "postLink",
-    帖文链接: "postLink",
-    链接: "postLink",
-    引流: "lead",
-    lead: "lead",
-    水滴: "water",
-    water: "water",
-    watertime: "waterTime",
-    水滴时间: "waterTime",
-    图片: "thumbnailUrl",
-    图片链接: "thumbnailUrl",
-    thumbnailurl: "thumbnailUrl",
-    thumb: "thumbnailUrl",
-    image: "thumbnailUrl",
-    content: "content",
-    文案: "content",
-    改写: "rewrite",
-    rewrite: "rewrite",
-    日期: "date",
-    date: "date",
-    分类: "category",
-    图片类型: "category",
-    category: "category",
-    点赞: "likes",
-    likes: "likes",
-    j: "likes",
-    j列: "likes",
-    评论: "comments",
-    comments: "comments",
-    分享: "shares",
-    shares: "shares",
-    美工: "designer",
-    美工名字: "designer",
-    designer: "designer",
-    artist: "designer",
-    ab: "designer",
-    ab列: "designer",
-    帖文类型: "postType",
-    posttype: "postType",
-    ocr: "ocr",
-    ocr翻译: "ocrTranslation",
-    ocrtranslation: "ocrTranslation",
-    音频文本: "audioText",
-    audiotext: "audioText",
-    音频翻译: "audioTranslation",
-    audiotranslation: "audioTranslation",
-    作者: "authorName",
-    作者id: "authorName",
-    authorname: "authorName",
-    来源: "sourceType",
-    来源类型: "sourceType",
-    sourcetype: "sourceType",
-    渠道: "sourceChannel",
-    来源渠道: "sourceChannel",
-    sourcechannel: "sourceChannel",
-    转换率: "conversionRate",
-    conversionrate: "conversionRate",
-    mediamode: "mediaMode",
-    备用图片: "thumbnailFallbackUrl",
-    thumbnailfallbackurl: "thumbnailFallbackUrl",
-    页面: "pageName",
-    pagename: "pageName",
-    头像: "avatarUrl",
-    avatarurl: "avatarUrl"
-  };
+    "管理员": "name",
+    "语言": "language",
+    "专页id": "authorName",
+    "专页名字": "pageName",
+    "帖文链接": "postLink",
+    "引流": "lead",
+    "帖文id": "postId",
+    "头像": "avatarUrl",
+    "图片链接": "imageUrl",
+    "发帖日期": "date",
+    "点赞": "likes",
+    "评论": "comments",
+    "分享": "shares",
+    "帖文类型": "postType",
+    "帖文内容": "content",
+    "帖文翻译": "postTranslation",
+    "文案类型": "copyType",
+    "ocr": "ocr",
+    "ocr翻译": "ocrTranslation",
+    "图片类型": "category",
+    "音频文本": "audioText",
+    "音频文本翻译": "audioTranslation",
+    "题材类型": "topicType",
+    "来源类型": "sourceType",
+    "缩略图": "thumbnailUrl",
+    "交教会": "water",
+    "转换率": "conversionRate",
+    "美工": "designer"
+};
 }
 
 function normalizeCsvHeader(value) {
   return stringOr(value)
     .replace(/^\ufeff/, "")
+    .replace(/&#x20;|&#32;|&nbsp;/gi, " ")
+    .replace(/[\u{1F300}-\u{10FFFF}\u2600-\u27bf\ufe0e\ufe0f]/gu, "")
     .replace(/[\s_\-（）()：:]/g, "")
     .toLowerCase();
 }
@@ -1515,7 +1393,6 @@ function renderCards() {
     meta.textContent = [
       record.date ? `🗓️ ${formatDate(record.date)}` : "",
       record.category ? `分类 ${record.category}` : "",
-      record.sourceChannel ? `渠道 ${record.sourceChannel}` : "",
       record.sourceType ? `来源 ${record.sourceType}` : ""
     ].filter(Boolean).join(" · ") || "暂无元信息";
 
@@ -1545,17 +1422,36 @@ function renderCards() {
       metricNode("点赞", formatCompactNumber(record.likes), "👍", formatNumber(record.likes)),
       metricNode("评论", formatCompactNumber(record.comments), "💬", formatNumber(record.comments)),
       metricNode("引流", formatCompactNumber(record.lead), "🔥", formatNumber(record.lead)),
-      metricNode("水滴", formatWaterDisplay(record), null, formatWaterFullValue(record)),
+      metricNode("交教会", formatWaterDisplay(record), null, formatWaterFullValue(record)),
       metricNode("转换率", formatPercentLike(record.conversionRate), "%")
     );
 
-    appendDetails(details, [
+    const hasLongDetails = appendDetails(details, [
       ["贴文类型", record.postType],
       ["图片类型", record.category || record.postType],
       ["名字", formatDisplayName(record)],
       ["美工", record.designer],
-      ["改贴", record.rewrite]
+      ["语言", record.language],
+      ["专页名字", record.pageName],
+      ["文案类型", record.copyType],
+      ["题材类型", record.topicType],
+      ["帖文内容", record.content],
+      ["帖文翻译", record.postTranslation]
     ]);
+    if (hasLongDetails) {
+      details.classList.add("is-collapsed");
+      const detailsButton = document.createElement("button");
+      detailsButton.type = "button";
+      detailsButton.className = "more-details-button";
+      detailsButton.textContent = "展开字段";
+      detailsButton.setAttribute("aria-expanded", "false");
+      detailsButton.addEventListener("click", () => {
+        const expanded = details.classList.toggle("is-collapsed") === false;
+        detailsButton.textContent = expanded ? "收起字段" : "展开字段";
+        detailsButton.setAttribute("aria-expanded", String(expanded));
+      });
+      details.insertAdjacentElement("afterend", detailsButton);
+    }
 
     const textLabel = mediaMode === "video" ? "音频文本" : "OCR";
     const translatedLabel = mediaMode === "video" ? "音频翻译" : "OCR 翻译";
@@ -1616,14 +1512,17 @@ function setExpandableText(element, label, value) {
 }
 
 function appendDetails(list, rows) {
+  let hasLongDetails = false;
   rows.forEach(([label, value]) => {
     if (!value && value !== 0) return;
     const dt = document.createElement("dt");
     const dd = document.createElement("dd");
     dt.textContent = label;
     dd.textContent = String(value);
+    if (String(value).length > 60) hasLongDetails = true;
     list.append(dt, dd);
   });
+  return hasLongDetails;
 }
 
 function actionLink(label, href) {
@@ -1681,7 +1580,7 @@ async function copyToClipboard(text) {
 function matchesFilters(record) {
   const f = state.filters;
 
-  // 搜索：名字 / 美工 / 渠道 / 专页名 / 作者 / 文案 等（多关键词空格=且）
+  // 搜索：名字 / 美工 / 专页名 / 作者 / 文案 等（多关键词空格=且）
   if (f.search) {
     const haystack = buildSearchHaystack_(record);
     const tokens = normalizeSearchText_(f.search)
@@ -1694,7 +1593,6 @@ function matchesFilters(record) {
 
   if (f.category && record.category !== f.category) return false;
   if (f.sourceType && record.sourceType !== f.sourceType) return false;
-  if (f.sourceChannel && record.sourceChannel !== f.sourceChannel) return false;
   if (f.postType && record.postType !== f.postType) return false;
 
   const dateValue = dateNumber(record.date);
@@ -1742,13 +1640,12 @@ function getRecordDisplayName_(record) {
 function buildSearchHaystack_(record) {
   if (!record) return "";
   if (record._searchHaystack) return record._searchHaystack;
-  // 搜索仍可匹配美工/渠道等，但展示名不混用
+  // 搜索仍可匹配美工和专页名，但展示名不混用
   const parts = [
     record.name,
     record.nameRaw,
     record.title,
     record.designer,
-    record.sourceChannel,
     record.pageName,
     record.authorName,
     record.maker,
@@ -1803,25 +1700,21 @@ function rebuildCatalogs(serverCatalogs) {
   const values = {
     categories: new Map(),
     sourceTypes: new Map(),
-    sourceChannels: new Map(),
     postTypes: new Map()
   };
 
   (serverCatalogs?.categories || []).forEach(value => addCatalogValue(values.categories, value));
   (serverCatalogs?.sourceTypes || []).forEach(value => addCatalogValue(values.sourceTypes, value));
-  (serverCatalogs?.sourceChannels || []).forEach(value => addCatalogValue(values.sourceChannels, value));
   (serverCatalogs?.postTypes || []).forEach(value => addCatalogValue(values.postTypes, value));
 
   state.records.forEach(record => {
     addCatalogValue(values.categories, record.category);
     addCatalogValue(values.sourceTypes, record.sourceType);
-    addCatalogValue(values.sourceChannels, record.sourceChannel);
     addCatalogValue(values.postTypes, record.postType);
   });
 
   fillSelect(els.categoryFilter, values.categories, "全部分类", state.filters.category);
   fillSelect(els.sourceTypeFilter, values.sourceTypes, "全部来源类型", state.filters.sourceType);
-  fillSelect(els.sourceChannelFilter, values.sourceChannels, "全部来源渠道", state.filters.sourceChannel);
   fillSelect(els.postTypeFilter, values.postTypes, "全部贴文类型", state.filters.postType);
 }
 
@@ -1851,40 +1744,13 @@ function addCatalogValue(map, value) {
 }
 
 function pickDesignerField(input) {
-  if (!input || typeof input !== "object") return "";
-  const fromField = stringOr(
-    input.designer ||
-      input.artist ||
-      input.美工 ||
-      input.美工名字 ||
-      input.ab ||
-      input.AB ||
-      input.columnAB ||
-      input.colAB
-  );
-  if (fromField) return fromField;
-  // Excel AB 列 = 0-based index 27
-  if (Array.isArray(input.raw) && input.raw.length > 27) return stringOr(input.raw[27]);
-  if (Array.isArray(input.row) && input.row.length > 27) return stringOr(input.row[27]);
-  return "";
+  return stringOr(input?.designer ?? input?.美工);
 }
 
 function pickLikesField(input) {
-  if (!input || typeof input !== "object") return input && input.likes;
-  if (input.likes != null && input.likes !== "") return input.likes;
-  // Excel J 列 = 0-based index 9
-  return (
-    input.j ??
-    input.J ??
-    input.columnJ ??
-    input.colJ ??
-    input["点赞"] ??
-    (Array.isArray(input.raw) ? input.raw[9] : undefined) ??
-    (Array.isArray(input.row) ? input.row[9] : undefined)
-  );
+  return input?.likes ?? input?.["点赞"] ?? input?.["👍点赞"] ?? "";
 }
 
-/** 名字 + AB 列美工；表内「未找到」不当真名 */
 function formatDisplayName(record) {
   // 标题：真实「名字」；美工单独拼接（美工也是「未找到」则不拼）
   const name = getRecordDisplayName_(record);
@@ -1908,6 +1774,11 @@ function normalizeRecord(input) {
     thumbnailUrl: stringOr(input.thumbnailUrl || input.thumb || input.image),
     thumbnailFallbackUrl: stringOr(input.thumbnailFallbackUrl || input.fallbackThumbnailUrl || input.backupThumbnailUrl),
     content: stringOr(input.content),
+    language: stringOr(input.language),
+    postTranslation: stringOr(input.postTranslation),
+    copyType: stringOr(input.copyType),
+    topicType: stringOr(input.topicType),
+    imageUrl: stringOr(input.imageUrl),
     rewrite: stringOr(input.rewrite),
     date: stringOr(input.date),
     category: normalizeCatalogValue(input.category || input.type),
@@ -1915,8 +1786,8 @@ function normalizeRecord(input) {
     designer: pickDesignerField(input),
     comments: input.comments,
     shares: input.shares,
-    water: input.water ?? input.waterDrops ?? input.droplets ?? input["水滴"] ?? input.z ?? input.Z ?? input.columnZ ?? input.colZ,
-    waterTime: stringOr(input.waterTime || input.waterDate || input["水滴时间"] || input.aa || input.AA || input.columnAA || input.colAA),
+    water: input.water ?? input["交教会"],
+    waterTime: stringOr(input.waterTime),
     postType: normalizeCatalogValue(input.postType),
     ocr: stringOr(input.ocr),
     ocrTranslation: stringOr(input.ocrTranslation),
@@ -2121,13 +1992,13 @@ function trimNumber(value, decimals) {
 
 function formatWaterDisplay(record) {
   const value = formatCompactNumber(record.water);
-  const time = formatDateOnly(record.waterTime) || "无日期";
+  const time = formatDateOnly(record.waterTime || record.date) || "无日期";
   return `📅${time} 💧 ${value}`;
 }
 
 function formatWaterFullValue(record) {
   const value = formatNumber(record.water);
-  const time = formatDateOnly(record.waterTime) || "无日期";
+  const time = formatDateOnly(record.waterTime || record.date) || "无日期";
   return `📅${time} 💧 ${value}`;
 }
 

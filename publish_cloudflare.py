@@ -16,140 +16,18 @@ from fetch_posts import load_sync_state, remember_cf_fingerprint, save_sync_stat
 
 LogFn = Callable[[str], None]
 
-# 汇总字段名 → 前端 asset 字段
+# Only the actual spreadsheet header names define columns. No positional fallback.
 HEADER_TO_ASSET = {
-    "名字": "name",
-    "帖文id": "postId",
-    "FB链接": "postLink",
-    "引流": "lead",
-    "缩略图链接": "thumbnailUrl",
-    "帖文内容": "content",
-    "改贴": "rewrite",
-    "发布日期": "date",
-    "图片类型": "category",
-    "点赞": "likes",
-    "评论": "comments",
-    "分享": "shares",
-    "帖文类型": "postType",
-    "OCR": "ocr",
-    "OCR翻译": "ocrTranslation",
-    "音频文本": "audioText",
-    "音频文本翻译": "audioTranslation",
-    "专页id": "maker",
-    "小组": "group",
-    "美工": "designer",
-    "水滴": "water",
-    "水滴时间": "waterTime",
-    "来源类型": "sourceType",
-    "来源渠道": "sourceChannel",
+    "管理员": "name", "语言": "language", "专页id": "maker", "专页名字": "pageName",
+    "帖文链接": "postLink", "引流": "lead", "帖文ID": "postId", "头像": "avatarUrl",
+    "图片链接": "imageUrl", "发帖日期": "date", "点赞": "likes", "评论": "comments",
+    "分享": "shares", "帖文类型": "postType", "帖文内容": "content", "帖文翻译": "postTranslation",
+    "文案类型": "copyType", "OCR": "ocr", "OCR翻译": "ocrTranslation",
+    "图片类型": "category", "音频文本": "audioText", "音频文本翻译": "audioTranslation",
+    "题材类型": "topicType", "来源类型": "sourceType", "缩略图": "thumbnailUrl",
+    "交教会": "water", "转换率": "conversionRate", "美工": "designer",
 }
-
-# 表头别名 → 规范字段名（结果表可能没有中文表头）
-HEADER_ALIASES = {
-    "名字": "名字",
-    "名称": "名字",
-    "name": "名字",
-    "帖文id": "帖文id",
-    "帖子id": "帖文id",
-    "postid": "帖文id",
-    "fb链接": "FB链接",
-    "帖文链接": "FB链接",
-    "链接": "FB链接",
-    "postlink": "FB链接",
-    "引流": "引流",
-    "lead": "引流",
-    "缩略图链接": "缩略图链接",
-    "缩略图": "缩略图链接",
-    "图片": "缩略图链接",
-    "图片链接": "缩略图链接",
-    "thumbnailurl": "缩略图链接",
-    "帖文内容": "帖文内容",
-    "文案": "帖文内容",
-    "content": "帖文内容",
-    "改贴": "改贴",
-    "改写": "改贴",
-    "rewrite": "改贴",
-    "发布日期": "发布日期",
-    "日期": "发布日期",
-    "date": "发布日期",
-    "图片类型": "图片类型",
-    "分类": "图片类型",
-    "category": "图片类型",
-    "点赞": "点赞",
-    "likes": "点赞",
-    "评论": "评论",
-    "comments": "评论",
-    "分享": "分享",
-    "shares": "分享",
-    "帖文类型": "帖文类型",
-    "posttype": "帖文类型",
-    "ocr": "OCR",
-    "ocr翻译": "OCR翻译",
-    "ocrtranslation": "OCR翻译",
-    "音频文本": "音频文本",
-    "audiotext": "音频文本",
-    "音频文本翻译": "音频文本翻译",
-    "音频翻译": "音频文本翻译",
-    "专页id": "专页id",
-    "作者": "专页id",
-    "作者id": "专页id",
-    "authorname": "专页id",
-    "小组": "小组",
-    "group": "小组",
-    "美工": "美工",
-    "美工名字": "美工",
-    "designer": "美工",
-    "水滴": "水滴",
-    "water": "水滴",
-    "水滴时间": "水滴时间",
-    "watertime": "水滴时间",
-    "头像": "头像",
-    "avatarurl": "头像",
-    "备用图片": "备用图片",
-    "页面": "页面",
-    "管理员专页": "名字",
-    "管理员": "名字",
-    "改贴/原创": "改贴",
-    "发帖日期": "发布日期",
-    "文本翻译": "音频文本翻译",
-    "来源类型": "来源类型",
-    "sourcetype": "来源类型",
-    "来源渠道": "来源渠道",
-    "sourcechannel": "来源渠道",
-}
-
-# 与 Apps Script mapRow_ / 本工具写入顺序一致：A=名字 … R=专页id，AC=小组
-POSITIONAL = {
-    "名字": 0,
-    "帖文id": 1,
-    "FB链接": 2,
-    "引流": 3,
-    "缩略图链接": 4,
-    "帖文内容": 5,
-    "改贴": 6,
-    "发布日期": 7,
-    "图片类型": 8,
-    "点赞": 9,
-    "评论": 10,
-    "分享": 11,
-    "帖文类型": 12,
-    "OCR": 13,
-    "OCR翻译": 14,
-    "音频文本": 15,
-    "音频文本翻译": 16,
-    "专页id": 17,
-    "小组": 18,
-    "头像": 19,
-    "来源类型": 20,
-    "来源渠道": 21,
-    "备用图片": 22,
-    "页面": 24,
-    "水滴": 25,
-    "水滴时间": 26,
-    "美工": 27,
-}
-GROUP_COL_AC = 28  # 本工具把「小组」写到 AC
-URL_FIELDS = {"FB链接", "缩略图链接", "备用图片", "头像"}
+URL_FIELDS = {"帖文链接", "图片链接", "缩略图", "头像"}
 _NOISE_RE = re.compile(
     r"[\U0001F300-\U0010ffff]|[\u2600-\u27bf]|[\ufe0e\ufe0f]|[|·•🎨📜]"
 )
@@ -162,34 +40,19 @@ _URL_RE = re.compile(r"https?://[^\s\"')>,]+", re.IGNORECASE)
 
 
 def _norm_header(value: Any) -> str:
-    text = str(value or "").strip().lower()
+    from html import unescape
+    text = unescape(str(value or "")).strip().lower()
     text = _NOISE_RE.sub("", text)
     return text.replace(" ", "").replace("_", "")
 
 
 def _canonical_header(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if raw in HEADER_TO_ASSET:
-        return raw
-    key = _norm_header(raw)
-    return HEADER_ALIASES.get(raw) or HEADER_ALIASES.get(key) or raw
+    key = _norm_header(value)
+    return next((name for name in HEADER_TO_ASSET if _norm_header(name) == key), "")
 
 
 def _looks_like_header(row: list[Any] | None) -> bool:
-    if not row:
-        return False
-    hits = 0
-    for cell in row[:32]:
-        raw = str(cell or "").strip()
-        if not raw:
-            continue
-        if _canonical_header(raw) in HEADER_TO_ASSET or _norm_header(raw) in HEADER_ALIASES:
-            hits += 1
-            if hits >= 2:
-                return True
-    return False
+    return bool(row and sum(bool(_canonical_header(cell)) for cell in row) >= 2)
 
 
 def split_sheet_for_publish(
@@ -205,14 +68,11 @@ def split_sheet_for_publish(
     if _looks_like_header(head):
         headers = [str(x).strip() for x in head]
         return headers, values[start:], f"第 {start} 行表头", start + 1
-    if include_headers:
-        headers = [str(x).strip() for x in head]
-        return headers, values[start:], f"第 {start} 行当表头", start + 1
-    for i in range(min(start - 1, 3)):
+    # Results may begin below an existing header, but never guess column positions.
+    for i in range(start - 1):
         if _looks_like_header(values[i]):
-            headers = [str(x).strip() for x in values[i]]
-            return headers, values[start - 1 :], f"第 {i + 1} 行表头，数据从第 {start} 行", start
-    return [], values[start - 1 :], f"无表头，按列位置（数据从第 {start} 行）", start
+            return [str(x).strip() for x in values[i]], values[start - 1:], f"第 {i + 1} 行表头", start
+    raise ValueError("没有识别到表格表头，请填写正确的表头行；已停止发布，不再按旧列位置读取")
 
 
 def _text(value: Any) -> str:
@@ -302,8 +162,7 @@ def _header_index(headers: list[str], rows: list[list[Any]]) -> dict[str, int]:
         if key not in index:
             index[key] = i
             continue
-        if key in URL_FIELDS and _url_hits(rows, i) > _url_hits(rows, index[key]):
-            index[key] = i
+        raise ValueError(f"表头「{key}」重复，请保留唯一一列后再发布")
     return index
 
 
@@ -323,148 +182,193 @@ def rows_to_assets(
     start_row: int = 1,
 ) -> list[dict[str, Any]]:
     index = _header_index(headers, rows)
-    named = sum(1 for k in HEADER_TO_ASSET if k in index)
-    mode = f"表头命中 {named} 列" if named else "按 A=名字 / B=帖文id / C=链接 列位置"
-    n = len(rows)
-    if log:
-        thumb_at = index.get("缩略图链接", POSITIONAL["缩略图链接"])
-        log(f"正在转换 {n} 行（{mode}，缩略图列 {thumb_at + 1}）…")
-
-    assets: list[dict[str, Any]] = []
-    skipped = 0
-    for r, row in enumerate(rows):
-        if log and r and r % 10000 == 0:
-            log(f"  已扫描 {r}/{n} 行，有效 {len(assets)} 条")
-
-        def col(name: str) -> Any:
-            i = index.get(name)
-            if i is None:
-                i = POSITIONAL.get(name)
-            return _cell(row, i)
-
-        name = _text(col("名字")) or _text(_cell(row, 0))
-        post_id = _text(col("帖文id"))
-        post_link = _first_http(col("FB链接"), _cell(row, 2), _cell(row, 18))
-        thumb = public_image_url(_first_http(col("缩略图链接"), _cell(row, 4), _cell(row, 22)))
-        fallback = public_image_url(_first_http(col("备用图片"), _cell(row, 22), _cell(row, 4)))
-        post_type = _text(col("帖文类型"))
-        category = _text(col("图片类型"))
-        group = ""
-        if group_values is not None and r < len(group_values):
-            group = _text(group_values[r])
-        if not group and "小组" in index:
-            group = _text(col("小组"))
-        if not group:
-            group = _text(_cell(row, GROUP_COL_AC))
-        author = _text(col("专页id"))
-        date_s = _date_text(col("发布日期"))
-        if not (name or post_id or post_link or thumb or fallback):
-            skipped += 1
+    if "帖文链接" not in index:
+        raise ValueError("缺少必需表头「帖文链接」，请检查表头行；旧图库未替换")
+    assets = []
+    for offset, row in enumerate(rows):
+        asset = {field: _text(_cell(row, index.get(header))) for header, field in HEADER_TO_ASSET.items()}
+        link = _first_http(asset["postLink"])
+        if not link:
             continue
-        preview = thumb or fallback
-        sheet_row = int(start_row or 1) + r
-        asset = {
-            "id": f"{post_id or post_link or 'row'}-{sheet_row}",
-            "rowNumber": sheet_row,
-            "title": name or post_type or f"素材 {r + 1}",
-            "name": name,
-            "postId": post_id,
-            "postLink": post_link,
-            "lead": _text(col("引流")),
-            "sourceUrl": post_link,
-            "previewUrl": preview,
-            "thumbnailUrl": preview,
-            "thumbnailFallbackUrl": fallback or thumb,
-            "viewUrl": post_link,
-            "content": _text(col("帖文内容")),
-            "rewrite": _text(col("改贴")),
-            "date": date_s,
-            "type": category or post_type,
-            "category": category,
-            "likes": _text(col("点赞")),
-            "comments": _text(col("评论")),
-            "shares": _text(col("分享")),
-            "postType": post_type,
-            "ocr": _text(col("OCR")),
-            "ocrTranslation": _text(col("OCR翻译")),
-            "audioText": _text(col("音频文本")),
-            "audioTranslation": _text(col("音频文本翻译")),
-            "maker": author,
-            "authorName": author,
-            "group": group,
-            "sourceType": _text(col("来源类型")),
-            "sourceChannel": _text(col("来源渠道")),
-            "pageName": _text(col("页面")),
-            "avatarUrl": extract_url_from_cell(col("头像")),
-            "designer": _text(col("美工")),
-            "water": _text(col("水滴")),
-            "waterTime": _date_text(col("水滴时间")),
-            "mediaMode": "video" if "视频" in (post_type + category) else "image",
-        }
+        image = public_image_url(asset["imageUrl"])
+        thumb = public_image_url(asset["thumbnailUrl"]) or image
+        asset.update(
+            id=hashlib.sha256((asset["postId"] or link).encode()).hexdigest()[:32],
+            rowNumber=start_row + offset, postLink=link, sourceUrl=link, viewUrl=link,
+            title=asset["name"] or asset["pageName"] or asset["postType"] or "素材",
+            date=_date_text(_cell(row,index.get("发帖日期"))),
+            imageUrl=image, previewUrl=thumb, thumbnailUrl=thumb, thumbnailFallbackUrl=image or thumb,
+            avatarUrl=_first_http(asset["avatarUrl"]), authorName=asset["maker"],
+            type=asset["category"] or asset["postType"],
+            group=_text(group_values[offset]) if group_values is not None and offset<len(group_values) else "",
+            mediaMode="video" if "视频" in asset["postType"]+asset["category"] else "image",
+        )
         assets.append(asset)
-    if log:
-        log(f"转换完成：有效 {len(assets)} 条，跳过空行 {skipped}")
+    if log: log(f"按实际表头读取：有效 {len(assets)} 条，跳过 {len(rows)-len(assets)} 条无帖文链接记录")
     return assets
 
 
-def overlay_formula_urls(
-    ws,
-    rows: list[list[Any]],
-    start_row: int,
-    log: LogFn = print,
-) -> None:
-    """IMAGE/HYPERLINK 单元格用 UNFORMATTED_VALUE 经常是空的，补读公式列。"""
-    if not rows:
-        return
-    sample = rows[:120]
+def overlay_formula_urls(ws, rows, start_row, log=print, *, headers=None):
+    """Read formula URLs only from columns identified by the actual headers."""
+    from fetch_posts import index_to_col_letter
+    if not rows: return
+    index = _header_index(headers or [],rows)
+    cols = sorted(index[name] for name in URL_FIELDS if name in index)
+    if not cols: return
+    end = start_row + len(rows)-1
+    ranges = [f"{index_to_col_letter(c)}{start_row}:{index_to_col_letter(c)}{end}" for c in cols]
+    batches = with_retry(lambda: ws.batch_get(ranges,value_render_option="FORMULA"), log=log,what="读取链接公式")
+    for values, col in zip(batches,cols):
+        for offset, cells in enumerate(values):
+            if offset >= len(rows): break
+            url = _first_http(cells[0] if cells else "")
+            if url:
+                while len(rows[offset]) <= col: rows[offset].append("")
+                rows[offset][col] = url
 
-    def has_url(row: list[Any], idx: int) -> bool:
-        if idx >= len(row):
-            return False
-        t = str(row[idx] or "")
-        return "http" in t.lower() or t.strip().startswith("=")
 
-    link_ok = sum(1 for r in sample if has_url(r, 2))
-    thumb_ok = sum(1 for r in sample if has_url(r, 4))
-    need_c = link_ok < max(8, len(sample) * 0.35)
-    need_e = thumb_ok < max(8, len(sample) * 0.35)
-    if not need_c and not need_e:
-        return
+def mapped_post_headers(headers, mappings=None):
+    """Rename explicitly configured source headers without positional assumptions."""
+    result = [str(h).strip() for h in headers]
+    for item in mappings or []:
+        source, target = str(item.get('source') or '').strip(), str(item.get('target') or '').strip()
+        if not source or not target:
+            raise ValueError('字段映射的源表头和目标字段不能为空')
+        matches = [i for i, h in enumerate(headers) if _norm_header(h) == _norm_header(source)]
+        if len(matches) != 1:
+            raise ValueError(f'映射源表头「{source}」不存在或重复，请重新读取表头')
+        result[matches[0]] = target
+    names = [_norm_header(h) for h in result if _norm_header(h)]
+    if len(names) != len(set(names)):
+        raise ValueError('映射后的表头字段名称重复，请检查')
+    return result
 
-    end = start_row + len(rows) - 1
-    ranges: list[str] = []
-    cols: list[int] = []
-    if need_c:
-        ranges.append(f"C{start_row}:C{end}")
-        cols.append(2)
-    if need_e:
-        ranges.append(f"E{start_row}:E{end}")
-        cols.append(4)
-    ranges.extend([f"T{start_row}:T{end}", f"W{start_row}:W{end}"])
-    cols.extend([19, 22])
-    log("部分链接/图片单元格为空，正在补读公式列…")
 
-    def _do():
-        return ws.batch_get(ranges, value_render_option="FORMULA")
+def filter_source_settings(cfg):
+    from fetch_posts import normalize_sources
+    sources = normalize_sources(getattr(cfg, "sources", None) or getattr(cfg, "source_urls", None))
+    if sources:
+        return [src.url for src in sources], cfg.filter_source_sheet, cfg.filter_header_row
+    # Compatibility for saved configurations from the separate direct-publish form.
+    return ([cfg.cf_direct_url] if cfg.cf_direct_url else []), cfg.cf_direct_sheet, cfg.cf_direct_header_row
 
-    batches = with_retry(_do, log=log, what="读取公式")
-    filled = 0
-    for col_vals, col_idx in zip(batches, cols):
-        for i, cell_row in enumerate(col_vals):
-            if i >= len(rows):
-                break
-            raw = cell_row[0] if cell_row else ""
-            url = extract_url_from_cell(raw)
-            if not url or not url.lower().startswith("http"):
-                continue
-            row = rows[i]
-            while len(row) <= col_idx:
-                row.append("")
-            existing = str(row[col_idx] or "")
-            if "http" not in existing.lower():
-                row[col_idx] = url
-                filled += 1
-    log(f"从公式补到 {filled} 个链接/图片地址")
+
+def peek_filter_headers(cfg):
+    from fetch_posts import authorize_cfg, open_by_url_or_id, with_retry
+    urls, sheet, top = filter_source_settings(cfg)
+    if not urls: raise ValueError('请先填写数据源表格链接')
+    top = int(top)
+    if top < 1: raise ValueError('表头行必须是正整数')
+    ss = open_by_url_or_id(authorize_cfg(cfg), urls[0])
+    ws = post_source_worksheet(ss, urls[0], sheet)
+    headers = with_retry(lambda: ws.row_values(top), what='读取表头')
+    mapped_post_headers(headers)
+    return [{'source': str(h).strip(), 'target': _canonical_header(h) or str(h).strip()}
+            for h in headers if _norm_header(h)]
+
+
+def post_source_worksheet(ss, url, sheet_name):
+    from urllib.parse import urlsplit, parse_qs
+    if sheet_name:
+        ws = ss.worksheet(sheet_name)
+    else:
+        parsed = urlsplit(url)
+        gid = (parse_qs(parsed.fragment).get('gid') or parse_qs(parsed.query).get('gid') or [None])[0]
+        if gid is not None:
+            ws = ss.get_worksheet_by_id(int(gid))
+        else:
+            tabs = [tab for tab in ss.worksheets() if not (getattr(tab, '_properties', {}) or {}).get('hidden')]
+            if len(tabs) != 1: raise ValueError('请填写源子表名称，或使用带 gid 的子表链接')
+            ws = tabs[0]
+    if ws is None: raise ValueError('没有找到指定子表')
+    return ws
+
+
+def read_post_source(ss, url, sheet_name, header_row, log=print, *, mappings=None):
+    """Return all named source columns in their actual order, without field mappings."""
+    from fetch_posts import read_sheet_values
+    from urllib.parse import urlsplit, parse_qs
+    from sheet_links import read_links
+    from metric_sheet_io import MetricReader
+    try: top=int(header_row)
+    except (ValueError,TypeError): raise ValueError("表头行必须是正整数")
+    if top<1: raise ValueError("表头行必须是正整数")
+    ws = post_source_worksheet(ss, url, sheet_name)
+    values=read_sheet_values(ws,log=log)
+    if len(values)<top: raise ValueError("表头行超出表格数据范围")
+    headers=mapped_post_headers(values[top-1], mappings)
+    positions=[i for i,h in enumerate(headers) if _norm_header(h)]
+    names=[_norm_header(headers[i]) for i in positions]
+    if not names or len(names)!=len(set(names)): raise ValueError("源表表头为空或重复，请检查")
+    rows=[list(row) for row in values[top:]]
+    overlay_formula_urls(ws,rows,top+1,log=log,headers=headers)
+    columns=[i for i,h in enumerate(headers) if _canonical_header(h) in URL_FIELDS]
+    if rows:
+        links=read_links(ss,ws.title,top+1,top+len(rows),columns,rows,0,MetricReader(ss,log=log))
+        for (offset,column),url in links.items():
+            while len(rows[offset])<=column: rows[offset].append("")
+            rows[offset][column]=url
+    return [headers[i] for i in positions], [[_cell(row,i) for i in positions] for row in rows]
+
+
+def publish_configured_sheet(cfg, gc, log=print):
+    """Read and publish a configured sheet, without running aggregation or writing Sheets."""
+    from fetch_posts import open_by_url_or_id, read_sheet_values
+    from urllib.parse import urlsplit, parse_qs
+    direct = getattr(cfg,"cf_publish_mode","merged") == "direct"
+    if direct:
+        urls, sheet, top = filter_source_settings(cfg)
+        if isinstance(top, str):
+            try: top = int(top)
+            except ValueError as exc: raise ValueError('表头行必须是正整数') from exc
+        if int(top) < 1: raise ValueError('表头行必须是正整数')
+        if not urls: raise ValueError('请填写数据源表格链接')
+        headers, rows = [], []
+        for url in urls:
+            ss = open_by_url_or_id(gc, url, log=log)
+            names, values = read_post_source(ss, url, sheet, top, log,
+                                            mappings=getattr(cfg, 'filter_header_mappings', []))
+            if "帖文链接" not in _header_index(names, values):
+                raise ValueError("缺少必需表头「帖文链接」，请检查表头行和字段映射")
+            if set(map(_norm_header,names)) != set(map(_norm_header, names)):
+                raise ValueError('数据源表头不一致，请检查字段映射')
+            if not headers: headers = names
+            index = {_norm_header(h): i for i, h in enumerate(names)}
+            if set(index) != {_norm_header(h) for h in headers}:
+                raise ValueError('数据源表头不一致，请检查字段映射')
+            rows.extend([[_cell(row, index[_norm_header(h)]) for h in headers] for row in values])
+        log(f'直接读取 {len(urls)} 个数据源，共 {len(rows)} 行；不筛选、不写入汇总表')
+        return publish_assets_to_cloudflare(cfg, headers, rows, log=log, start_row=int(top)+1)
+    elif str(cfg.cf_publish_source or "all").lower() == "hot":
+        url, sheet = cfg.hot_target_url or cfg.target_url, cfg.hot_output_sheet or "高亮结果"
+        start, include_headers = int(cfg.hot_start_row or 1), bool(cfg.hot_include_headers)
+    else:
+        url, sheet = cfg.target_url, cfg.output_sheet
+        start, include_headers = int(cfg.output_start_row or 1), bool(cfg.include_headers)
+    if not url: raise ValueError("请填写直接发布的表格链接" if direct else "请填写要发布的结果表链接")
+    ss = open_by_url_or_id(gc,url,log=log)
+    if sheet: ws = ss.worksheet(sheet)
+    else:
+        parsed=urlsplit(url);gid=(parse_qs(parsed.fragment).get('gid') or parse_qs(parsed.query).get('gid') or [None])[0]
+        if gid is None: raise ValueError("请填写子表名称，或使用带 gid 的子表链接")
+        ws=ss.get_worksheet_by_id(int(gid))
+        if ws is None: raise ValueError("没有找到指定子表")
+    values=read_sheet_values(ws,log=log)
+    if direct and (len(values)<start or not _looks_like_header(values[start-1])):
+        raise ValueError("指定行不是可识别的表头，请检查表头行")
+    headers,rows,how,data_start=split_sheet_for_publish(values,start,include_headers)
+    # Validate before any publishing request.
+    index=_header_index(headers,rows)
+    if "帖文链接" not in index: raise ValueError("缺少必需表头「帖文链接」")
+    overlay_formula_urls(ws,rows,data_start,log=log,headers=headers)
+    if rows:
+        from sheet_links import read_links
+        from metric_sheet_io import MetricReader
+        columns = [index[name] for name in URL_FIELDS if name in index]
+        links = read_links(ss,ws.title,data_start,data_start+len(rows)-1,columns,rows,0,MetricReader(ss,log=log))
+        for (offset,column),url in links.items(): rows[offset][column]=url
+    log(f"读取「{ws.title}」{len(rows)} 行（{how}），无需汇总即可发布")
+    return publish_assets_to_cloudflare(cfg,headers,rows,log=log,start_row=data_start)
 
 
 def _http_json(url: str, secret: str, payload: dict, log: LogFn) -> dict:

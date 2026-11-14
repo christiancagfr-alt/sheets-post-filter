@@ -467,7 +467,9 @@ class Config:
     # 多个数据源：[{name: 分组, url: 链接}]
     sources: list[dict] = field(default_factory=list)
     # 抓取字段（界面可改）。空则用截图默认。
-    fields: list[dict] = field(default_factory=copy_default_fields)
+    fields: list[dict] = field(default_factory=copy_default_fields)  # retained for old config backup only
+    filter_source_sheet: str = ""
+    filter_header_row: str = "1"
     # 兼容旧字段
     source_urls: list[str] = field(default_factory=list)
     # 兼容旧字段：单表模式
@@ -506,6 +508,11 @@ class Config:
     cf_publish_secret: str = ""
     cf_publish_after_sync: bool = False
     cf_publish_source: str = "all"  # all | hot
+    cf_publish_mode: str = "merged"  # merged | direct
+    filter_header_mappings: list[dict] = field(default_factory=list)
+    cf_direct_url: str = ""
+    cf_direct_sheet: str = ""
+    cf_direct_header_row: str = "1"
     cf_chunk_size: int = 800
     align_schedule_enabled: bool = False
     align_schedule_minutes: int = 60
@@ -1733,7 +1740,7 @@ def write_upsert(
     id_col_idx: int,
     log: LogFn,
 ) -> None:
-    """按 B 列（帖文id）匹配：已有行只改有变动的格子，新 id 追加到表尾。"""
+    """按实际帖文ID列匹配：已有行只改有变动的格子，新 id 追加到表尾。"""
     import gspread
 
     try:
@@ -1762,11 +1769,16 @@ def write_upsert(
     if ws.col_count < need_cols:
         ws.resize(rows=max(ws.row_count, data_start + 20), cols=need_cols)
 
-    log("读取目标表已有行，按帖文id（B列）匹配…")
+    log(f"读取目标表已有行，按帖文ID（{index_to_col_letter(id_col_idx)}列）匹配…")
     existing = read_sheet_values(ws, log=log)
 
     if include_headers:
         header_row = existing[start_row - 1] if len(existing) >= start_row else []
+        from publish_cloudflare import _norm_header
+        if any(str(x).strip() for x in header_row[:len(headers)]) and (
+            [_norm_header(x) for x in header_row[:len(headers)]] != [_norm_header(x) for x in headers]
+        ):
+            raise ValueError("结果表表头与当前源表不一致，已停止增量写入。请使用新的结果子表，或取消按编号更新后重新生成结果")
         if not any(str(x).strip() for x in header_row[: len(headers)]):
             with_retry(
                 lambda: ws.update(
@@ -2071,13 +2083,20 @@ def run(
     csv_path: Path | None = None,
     log: LogFn = print,
 ) -> dict[str, Any]:
-    gc = authorize_cfg(cfg, log=log)
+    if getattr(cfg, 'cf_publish_mode', 'merged') == 'direct':
+        gc = authorize_cfg(cfg, log=log)
+        if dry_run:
+            raise ValueError('直接发布模式不支持汇总预演，请使用读取表头检查配置')
+        from publish_cloudflare import publish_configured_sheet
+        log('直接读取发布：跳过筛选、汇总及目标表写入')
+        return {'ok': True, 'mode': 'cloudflare', **publish_configured_sheet(cfg, gc, log=log)}
 
+    gc = authorize_cfg(cfg, log=log)
     target_ref = target_url or cfg.target_url or cfg.spreadsheet_id
     source_refs = normalize_sources(
         sources if sources is not None else (cfg.sources or source_urls or cfg.source_urls)
     )
-    field_maps = resolve_fields(cfg)
+    from publish_cloudflare import read_post_source, _norm_header
 
     if not source_refs:
         raise RuntimeError("请至少填写一个数据源表格链接（所有源表表头相同，只换链接）")
@@ -2091,7 +2110,7 @@ def run(
     if write_hot and not hot_ref:
         raise RuntimeError("请填写「高赞」目标表链接")
 
-    log("字段配置: " + "、".join(f"{f.name}({f.sheet}!{f.range_spec})" for f in field_maps))
+    log("按源表实际表头读取，应用当前字段映射")
 
     dest_ref = target_ref or hot_ref
     log("打开目标表…")
@@ -2099,22 +2118,15 @@ def run(
     if target_ss:
         log(f"目标表: {target_ss.title}")
 
-    date_idx = find_field_index(field_maps, cfg.date_field, cfg.date_col_1based, log)
-    id_idx = find_field_index(field_maps, cfg.id_field, cfg.id_col_1based, log)
-    sort_idx = find_field_index(field_maps, cfg.sort_field, cfg.sort_col_1based, log)
+    date_idx = id_idx = sort_idx = None
 
     start_date, end_date = resolve_dates(cfg, target_ss, start_date, end_date)
     if start_date > end_date:
         raise RuntimeError("开始日期不能晚于结束日期")
     log(f"日期区间: {start_date.date()} ~ {end_date.date()}（含结束日）")
-    log(
-        f"排序字段: {field_maps[sort_idx].name}（"
-        + ("降序" if cfg.sort_descending else "升序")
-        + "）"
-    )
     log(f"数据源 {len(source_refs)} 个")
 
-    headers = [f.name for f in field_maps]
+    headers = []
     group_col = (cfg.group_column or "AC").strip().upper() or "AC"
     paired: list[tuple[list[Any], str]] = []
     per_source: list[dict[str, Any]] = []
@@ -2134,7 +2146,20 @@ def run(
             source_ss = open_by_url_or_id(gc, src.url, log=log)
             item["title"] = source_ss.title
             log(f"  表名: {source_ss.title}")
-            raw_rows = build_datasource_from_ss(source_ss, field_maps, log=log)
+            source_headers, source_rows = read_post_source(source_ss,src.url,cfg.filter_source_sheet,cfg.filter_header_row,log,mappings=cfg.filter_header_mappings)
+            source_index={_norm_header(h):col for col,h in enumerate(source_headers)}
+            for required in ("发帖日期","帖文ID","点赞"):
+                if _norm_header(required) not in source_index: raise ValueError(f"缺少必需表头「{required}」")
+            if not headers:
+                headers=source_headers
+                date_idx=source_index[_norm_header("发帖日期")]
+                id_idx=source_index[_norm_header("帖文ID")]
+                sort_idx=source_index[_norm_header("点赞")]
+                # Append the optional group after real columns, never overwrite source data.
+                group_col=index_to_col_letter(len(headers))
+            if set(source_index) != {_norm_header(h) for h in headers}:
+                raise ValueError("源表表头与首个源表不一致，请统一字段名称（顺序可以不同）")
+            raw_rows=[[row[source_index[_norm_header(h)]] for h in headers] for row in source_rows]
             log(f"  原始行数: {len(raw_rows)}")
             kept, stats = filter_and_sort(
                 raw_rows,
@@ -2156,6 +2181,9 @@ def run(
             item["error"] = str(e)
             log(f"  失败（跳过此源）: {e}")
         per_source.append(item)
+
+    if any(item.get("error") for item in per_source):
+        raise RuntimeError("部分源表读取失败，已停止写入和发布，避免不完整数据覆盖原结果；请查看运行日志")
 
     paired.sort(
         key=lambda item: to_number(item[0][sort_idx] if sort_idx < len(item[0]) else None),
@@ -2244,9 +2272,11 @@ def run(
             pub_rows = hot_rows if src == "hot" else merged
             pub_groups = hot_groups if src == "hot" else group_values
             log("汇总完成，开始直推 Cloudflare…")
-            cf_info = publish_assets_to_cloudflare(
-                cfg, headers, pub_rows, pub_groups, log=log
-            )
+            if getattr(cfg, "cf_publish_mode", "merged") == "direct":
+                from publish_cloudflare import publish_configured_sheet
+                cf_info = publish_configured_sheet(cfg, gc, log=log)
+            else:
+                cf_info = publish_assets_to_cloudflare(cfg, headers, pub_rows, pub_groups, log=log)
 
     result = {
         "ok": ok_sources > 0,

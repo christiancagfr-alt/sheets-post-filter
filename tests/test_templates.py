@@ -143,12 +143,12 @@ class TemplateConfigTests(unittest.TestCase):
 
     def test_cfg_from_payload_can_use_fresh_base(self):
         cfg = app._cfg_from_payload(
-            {"vd_schedule_enabled": True, "vd_source_url": "https://example.com/src", "vd_types": ["示例分类3"]},
+            {"vd_schedule_enabled": True, "vd_source_url": "https://example.com/src", "vd_types": ["wsp"]},
             base=app.Config(),
         )
         self.assertTrue(cfg.vd_schedule_enabled)
         self.assertEqual(cfg.vd_source_url, "https://example.com/src")
-        self.assertEqual(cfg.vd_types, ["示例分类3"])
+        self.assertEqual(cfg.vd_types, ["wsp"])
         cfg_posts = app._cfg_from_payload(
             {
                 "pa_list_url": "https://example.com/list",
@@ -164,8 +164,8 @@ class TemplateConfigTests(unittest.TestCase):
         cfg_rules = app._cfg_from_payload(
             {
                 "vd_types": [
-                    {"name": "示例分类4", "in_total": True, "in_item": False},
-                    {"name": "示例分类3", "in_total": False, "in_item": True, "duration_split": True},
+                    {"name": "口播", "in_total": True, "in_item": False},
+                    {"name": "wsp", "in_total": False, "in_item": True, "duration_split": True},
                 ]
             },
             base=app.Config(),
@@ -185,8 +185,8 @@ class TemplateConfigTests(unittest.TestCase):
                 "settings": {
                     "vd_schedule_enabled": True,
                     "vd_schedule_minutes": 60,
-                    "vd_source_url": "https://docs.google.com/spreadsheets/d/aaaaaaaaaaaaaaaaaaaaaaaaaa/edit",
-                    "vd_dest_url": "https://docs.google.com/spreadsheets/d/bbbbbbbbbbbbbbbbbbbbbbbbbb/edit",
+                    "vd_source_url": "https://docs.google.com/spreadsheets/d/example-file-id-01-xxxxxxxxxxxxxxxx/edit",
+                    "vd_dest_url": "https://docs.google.com/spreadsheets/d/example-file-id-02-xxxxxxxxxxxxxxxx/edit",
                 },
             },
         ]
@@ -211,8 +211,8 @@ class TemplateConfigTests(unittest.TestCase):
                 "settings": {
                     "vd_schedule_enabled": True,
                     "vd_schedule_minutes": "90",
-                    "vd_source_url": "https://docs.google.com/spreadsheets/d/aaaaaaaaaaaaaaaaaaaaaaaaaa/edit",
-                    "vd_dest_url": "https://docs.google.com/spreadsheets/d/bbbbbbbbbbbbbbbbbbbbbbbbbb/edit",
+                    "vd_source_url": "https://docs.google.com/spreadsheets/d/example-file-id-01-xxxxxxxxxxxxxxxx/edit",
+                    "vd_dest_url": "https://docs.google.com/spreadsheets/d/example-file-id-02-xxxxxxxxxxxxxxxx/edit",
                 },
             }
         )
@@ -228,10 +228,10 @@ class TemplateConfigTests(unittest.TestCase):
         self.assertEqual(client.get("/api/status?job_id=status-menu-b").get_json()["logs"][0]["msg"], "B")
 
     def test_source_specific_field_mapping_overrides_default(self):
-        source_url = "https://docs.google.com/spreadsheets/d/EXAMPLE_IDENTIFIER_0067/edit"
+        source_url = "https://docs.google.com/spreadsheets/d/example-file-id-03-xxxxxxxxxxxxxxxx/edit"
         cfg = app.Config(
             align_sources=[{"url": source_url, "sheet": "数据"}],
-            align_target_url="https://docs.google.com/spreadsheets/d/EXAMPLE_IDENTIFIER_0072/edit",
+            align_target_url="https://docs.google.com/spreadsheets/d/example-file-id-04-xxxxxxxxxxxxxxxx/edit",
             align_output_sheet="结果",
             align_mappings=[{"target": "姓名", "source": "名字"}, {"target": "数量", "source": "总量"}],
             align_mapping_profiles={source_url: [{"target": "姓名", "source": "人员"}, {"target": "数量", "source": "数目"}]},
@@ -274,8 +274,8 @@ class CatalogTests(unittest.TestCase):
         from video_duration import extract_url
 
         self.assertEqual(
-            extract_url('=HYPERLINK("https://docs.google.com/spreadsheets/d/EXAMPLE_IDENTIFIER_0065/edit","表")'),
-            "https://docs.google.com/spreadsheets/d/EXAMPLE_IDENTIFIER_0065/edit",
+            extract_url('=HYPERLINK("https://docs.google.com/spreadsheets/d/example-file-id-05-xxxxxxxxxxxxxxxx/edit","表")'),
+            "https://docs.google.com/spreadsheets/d/example-file-id-05-xxxxxxxxxxxxxxxx/edit",
         )
 
     def test_catalog_reuses_worksheet_list(self):
@@ -628,46 +628,46 @@ class VideoReportTests(unittest.TestCase):
 
     def test_video_report_two_or_three_columns(self):
         records = [
-            {"name": "甲", "type": "示例分类3 9:16", "date": "2026-08-01", "sec": 30},
-            {"name": "甲", "type": "示例分类4", "date": "2026-08-01", "sec": 90},
+            {"name": "甲", "type": "wsp 9:16", "date": "2026-08-01", "sec": 30},
+            {"name": "甲", "type": "口播", "date": "2026-08-01", "sec": 90},
         ]
         names, rows = _report_matrix(records, None, None, 30, "全部", types=[], preferred_names=["甲"])
         self.assertEqual(names, ["甲"])
         self.assertEqual(rows[2][1:3], ["总计数", "逐条计数"])
         self.assertEqual(len(rows[3]), 3)
-        names, rows = _report_matrix(records, None, None, 30, "全部", types=["示例分类3"], preferred_names=["甲"])
-        self.assertEqual(rows[2][1:4], ["总计数", "逐条计数", "示例分类3"])
+        names, rows = _report_matrix(records, None, None, 30, "全部", types=["wsp"], preferred_names=["甲"])
+        self.assertEqual(rows[2][1:4], ["总计数", "逐条计数", "wsp"])
         self.assertEqual(rows[3][1], 4)
         self.assertEqual(rows[3][3], 0)
         names, rows = _report_matrix(
-            [{"name": "甲", "type": "示例分类3", "date": "2026-08-01", "sec": 30}],
+            [{"name": "甲", "type": "wsp", "date": "2026-08-01", "sec": 30}],
             None,
             None,
             30,
             "全部",
-            types=["示例分类3"],
+            types=["wsp"],
             preferred_names=["甲"],
         )
         self.assertEqual(rows[3][3], 1)
-        names, rows = _report_matrix(records, None, None, 30, "全部", types=["示例分类3", "示例分类4"], preferred_names=["甲"])
-        self.assertEqual(rows[2][1:5], ["总计数", "逐条计数", "示例分类3", "示例分类4"])
+        names, rows = _report_matrix(records, None, None, 30, "全部", types=["wsp", "口播"], preferred_names=["甲"])
+        self.assertEqual(rows[2][1:5], ["总计数", "逐条计数", "wsp", "口播"])
         self.assertEqual(len(rows[3]), 5)
 
     def test_locked_headers_keep_name_order_and_ignore_new_people(self):
         records = [
-            {"name": "乙", "type": "示例分类4", "date": "2026-08-23", "sec": 30},
-            {"name": "甲", "type": "示例分类4", "date": "2026-08-23", "sec": 30},
+            {"name": "乙", "type": "口播", "date": "2026-08-23", "sec": 30},
+            {"name": "甲", "type": "口播", "date": "2026-08-23", "sec": 30},
         ]
         names, rows = _report_matrix(
-            records, None, None, 30, "全部", types=["示例分类4"], preferred_names=["甲"], lock_names=True
+            records, None, None, 30, "全部", types=["口播"], preferred_names=["甲"], lock_names=True
         )
         self.assertEqual(names, ["甲"])
         self.assertEqual(rows[1][1], "甲")
         custom_names, cats, custom_rows = _custom_report_matrix(
-            records, 30, ["示例分类4"], "per_video_ceil", preferred_names=["甲"], lock_names=True
+            records, 30, ["口播"], "per_video_ceil", preferred_names=["甲"], lock_names=True
         )
         self.assertEqual(custom_names, ["甲"])
-        self.assertEqual(cats, ["示例分类4"])
+        self.assertEqual(cats, ["口播"])
         self.assertEqual(custom_rows[0][1], "甲")
 
     def test_unpadded_dates_parse(self):
@@ -691,18 +691,18 @@ class VideoReportTests(unittest.TestCase):
 
     def test_unpadded_log_dates_count_in_report(self):
         records = [
-            {"name": "甜甜", "type": "形式化示例分类4（祷告，演讲等）", "date": "2026-8-23", "sec": 8},
-            {"name": "甜甜", "type": "形式化示例分类4（祷告，演讲等）", "date": "2026-08-23", "sec": 7},
+            {"name": "甜甜", "type": "形式化口播（祷告，演讲等）", "date": "2026-8-23", "sec": 8},
+            {"name": "甜甜", "type": "形式化口播（祷告，演讲等）", "date": "2026-08-23", "sec": 7},
         ]
         _names, rows = _report_matrix(
-            records, None, None, 30, "全部", types=["开场示例分类4"], preferred_names=["甜甜"]
+            records, None, None, 30, "全部", types=["开场口播"], preferred_names=["甜甜"]
         )
         day_row = next(row for row in rows[4:] if row[0] == "2026-08-23")
         self.assertEqual(day_row[2], 2)
         self.assertEqual(day_row[3], 0)
 
     def test_video_report_keeps_old_dates(self):
-        records = [{"name": "甲", "type": "示例分类4", "date": "2026-09-01", "sec": 30}]
+        records = [{"name": "甲", "type": "口播", "date": "2026-09-01", "sec": 30}]
         _names, payload = _report_matrix(records, None, None, 30, "全部", types=[], preferred_names=["甲"])
         existing = {
             "names": ["甲"],
@@ -720,8 +720,8 @@ class VideoReportTests(unittest.TestCase):
     def test_duplicate_drive_keeps_earliest_source_date(self):
         self.assertEqual(_earliest_iso_date("2026-08-24", "2026-08-23"), "2026-08-23")
         self.assertEqual(_earliest_iso_date("2026-08-23", "2026-08-24"), "2026-08-23")
-        rec = {"date": "2026-08-24", "name": "甜甜", "type": "形式化示例分类4"}
-        changed = _apply_earlier_source(rec, "2026-08-23", "甜甜", "形式化示例分类4")
+        rec = {"date": "2026-08-24", "name": "甜甜", "type": "形式化口播"}
+        changed = _apply_earlier_source(rec, "2026-08-23", "甜甜", "形式化口播")
         self.assertEqual(changed["date"], "2026-08-23")
         self.assertEqual(rec["date"], "2026-08-23")
         self.assertEqual(_apply_earlier_source(rec, "2026-08-24"), {})
@@ -749,8 +749,8 @@ class VideoReportTests(unittest.TestCase):
         # Source lists 8/24 first (upper rows) then 8/23: keep 8/23, one pending.
         actions, pending, patches, _idx = _run(
             [
-                ("d:abc", "2026-08-24", "甜甜", "形式化示例分类4"),
-                ("d:abc", "2026-08-23", "甜甜", "形式化示例分类4"),
+                ("d:abc", "2026-08-24", "甜甜", "形式化口播"),
+                ("d:abc", "2026-08-23", "甜甜", "形式化口播"),
             ]
         )
         self.assertEqual(actions, ["pending", "dup_earlier"])
@@ -763,7 +763,7 @@ class VideoReportTests(unittest.TestCase):
             "d:abc": {
                 "date": "2026-08-24",
                 "name": "甜甜",
-                "type": "形式化示例分类4",
+                "type": "形式化口播",
                 "sec": 8,
                 "row": 100,
                 "key": "d:abc",
@@ -771,8 +771,8 @@ class VideoReportTests(unittest.TestCase):
         }
         actions, pending, patches, idx = _run(
             [
-                ("d:abc", "2026-08-24", "甜甜", "形式化示例分类4"),
-                ("d:abc", "2026-08-23", "甜甜", "形式化示例分类4"),
+                ("d:abc", "2026-08-24", "甜甜", "形式化口播"),
+                ("d:abc", "2026-08-23", "甜甜", "形式化口播"),
             ],
             index=logged,
         )
@@ -783,14 +783,14 @@ class VideoReportTests(unittest.TestCase):
 
         actions, pending, patches, idx = _run(
             [
-                ("d:abc", "2026-08-24", "甜甜", "形式化示例分类4"),
-                ("d:abc", "2026-08-23", "甜甜", "形式化示例分类4"),
+                ("d:abc", "2026-08-24", "甜甜", "形式化口播"),
+                ("d:abc", "2026-08-23", "甜甜", "形式化口播"),
             ],
             index={
                 "d:abc": {
                     "date": "2026-08-23",
                     "name": "甜甜",
-                    "type": "形式化示例分类4",
+                    "type": "形式化口播",
                     "sec": 8,
                     "row": 100,
                     "key": "d:abc",
@@ -828,22 +828,22 @@ class VideoReportTests(unittest.TestCase):
 
     def test_custom_counts_by_person_day_category_without_duration(self):
         records = [
-            {"name": "甲", "type": "开场示例分类4", "date": "2026-08-01"},
-            {"name": "甲", "type": "开场示例分类4", "date": "2026-08-01"},
-            {"name": "甲", "type": "形式化示例分类4", "date": "2026-08-01"},
-            {"name": "乙", "type": "开场示例分类4", "date": "2026-08-02"},
+            {"name": "甲", "type": "开场口播", "date": "2026-08-01"},
+            {"name": "甲", "type": "开场口播", "date": "2026-08-01"},
+            {"name": "甲", "type": "形式化口播", "date": "2026-08-01"},
+            {"name": "乙", "type": "开场口播", "date": "2026-08-02"},
         ]
         names, categories, rows = _custom_report_matrix(
-            records, 30, ["开场示例分类4", "形式化示例分类4"], "per_video_ceil"
+            records, 30, ["开场口播", "形式化口播"], "per_video_ceil"
         )
-        self.assertEqual(categories, ["开场示例分类4", "形式化示例分类4"])
+        self.assertEqual(categories, ["开场口播", "形式化口播"])
         self.assertEqual(set(names), {"甲", "乙"})
         header = rows[0]
         types = rows[2]
         totals = rows[4]
         jia = header.index("甲")
         yi = header.index("乙")
-        self.assertEqual(types[jia], "开场示例分类4")
+        self.assertEqual(types[jia], "开场口播")
         self.assertEqual(totals[jia], 2.0)
         self.assertEqual(totals[jia + 1], 1.0)
         self.assertEqual(totals[yi], 1.0)
@@ -860,23 +860,23 @@ class VideoReportTests(unittest.TestCase):
         self.assertIn("🌙", job["logs"][-1]["msg"])
 
     def test_custom_buckets_separate_and_other(self):
-        self.assertEqual(_custom_buckets(["示例分类4"], ["示例分类4"], [], "其他"), ["示例分类4"])
-        self.assertEqual(_custom_buckets(["横版"], ["示例分类4"], [], "其他"), ["其他"])
-        self.assertEqual(_custom_buckets(["测试"], ["示例分类4"], ["测试"], "其他"), [])
-        self.assertEqual(_custom_buckets(["示例分类4", "样式A"], ["示例分类4", "样式A"], [], ""), ["示例分类4", "样式A"])
-        self.assertEqual(_custom_buckets(["样式A"], ["示例分类4"], [], ""), [])
-        self.assertEqual(_custom_buckets([], ["示例分类4"], [], "图片"), ["图片"])
-        self.assertEqual(_custom_buckets([""], ["FB", "示例分类4"], [], "图片"), ["图片"])
-        self.assertEqual(_custom_buckets(["FB"], ["FB", "示例分类4"], ["FB", "示例分类4"], "图片"), ["FB"])
-        self.assertEqual(_custom_buckets(["风景"], [], ["FB", "示例分类4"], "图片"), ["图片"])
-        self.assertEqual(_custom_buckets(["FB"], [], ["FB", "示例分类4"], "图片"), [])
-        self.assertEqual(_custom_buckets(["示例分类3 9:16"], ["示例分类3"], [], "图片"), ["示例分类3"])
-        self.assertEqual(_custom_buckets(["示例分类3横版"], ["示例分类3"], [], "图片"), ["示例分类3"])
-        self.assertEqual(_custom_buckets(["开场示例分类4"], ["示例分类4"], [], "图片"), ["示例分类4"])
-        self.assertTrue(_type_pattern_match("形式化示例分类4", "示例分类4"))
-        self.assertTrue(_type_pattern_match("示例分类3-a", "示例分类3*"))
-        self.assertFalse(_type_pattern_match("形式化示例分类4", "=示例分类4"))
-        self.assertTrue(_type_pattern_match("示例分类4", "=示例分类4"))
+        self.assertEqual(_custom_buckets(["口播"], ["口播"], [], "其他"), ["口播"])
+        self.assertEqual(_custom_buckets(["横版"], ["口播"], [], "其他"), ["其他"])
+        self.assertEqual(_custom_buckets(["测试"], ["口播"], ["测试"], "其他"), [])
+        self.assertEqual(_custom_buckets(["口播", "样式A"], ["口播", "样式A"], [], ""), ["口播", "样式A"])
+        self.assertEqual(_custom_buckets(["样式A"], ["口播"], [], ""), [])
+        self.assertEqual(_custom_buckets([], ["口播"], [], "图片"), ["图片"])
+        self.assertEqual(_custom_buckets([""], ["FB", "口播"], [], "图片"), ["图片"])
+        self.assertEqual(_custom_buckets(["FB"], ["FB", "口播"], ["FB", "口播"], "图片"), ["FB"])
+        self.assertEqual(_custom_buckets(["风景"], [], ["FB", "口播"], "图片"), ["图片"])
+        self.assertEqual(_custom_buckets(["FB"], [], ["FB", "口播"], "图片"), [])
+        self.assertEqual(_custom_buckets(["wsp 9:16"], ["wsp"], [], "图片"), ["wsp"])
+        self.assertEqual(_custom_buckets(["WSP横版"], ["wsp"], [], "图片"), ["wsp"])
+        self.assertEqual(_custom_buckets(["开场口播"], ["口播"], [], "图片"), ["口播"])
+        self.assertTrue(_type_pattern_match("形式化口播", "口播"))
+        self.assertTrue(_type_pattern_match("wsp-a", "wsp*"))
+        self.assertFalse(_type_pattern_match("形式化口播", "=口播"))
+        self.assertTrue(_type_pattern_match("口播", "=口播"))
 
     def test_trim_trailing_empty_columns(self):
         rows = [["a", "b", "", ""], ["c", "", "", ""], ["", "", "", ""]]
@@ -894,7 +894,7 @@ class VideoReportTests(unittest.TestCase):
                 "page_link": "https://facebook.com/page",
                 "page_code": "P001",
                 "name": "甜甜",
-                "type": "示例分类4",
+                "type": "口播",
                 "values": {("2026-08-27", ""): 35, ("2026-08-27", "00:00-01:00"): 2},
             },
             {
@@ -903,7 +903,7 @@ class VideoReportTests(unittest.TestCase):
                 "page_link": "https://facebook.com/page2",
                 "page_code": "P002",
                 "name": "甜甜",
-                "type": "示例分类4",
+                "type": "口播",
                 "values": {("2026-08-27", ""): 10},
             },
         ]
@@ -940,8 +940,8 @@ class VideoReportTests(unittest.TestCase):
 
     def test_video_types_become_extra_columns(self):
         records = [
-            {"name": "甜甜", "type": "开场示例分类4", "date": "2026-08-23", "sec": 8},
-            {"name": "甜甜", "type": "形式化示例分类4", "date": "2026-08-23", "sec": 7},
+            {"name": "甜甜", "type": "开场口播", "date": "2026-08-23", "sec": 8},
+            {"name": "甜甜", "type": "形式化口播", "date": "2026-08-23", "sec": 7},
         ]
         _names, rows = _report_matrix(
             records,
@@ -949,16 +949,16 @@ class VideoReportTests(unittest.TestCase):
             None,
             30,
             "全部",
-            types=["开场示例分类4"],
+            types=["开场口播"],
             preferred_names=["甜甜"],
         )
-        self.assertEqual(rows[2][1:4], ["总计数", "逐条计数", "开场示例分类4"])
+        self.assertEqual(rows[2][1:4], ["总计数", "逐条计数", "开场口播"])
         self.assertEqual(len(rows[3]), 4)
 
     def test_extra_columns_count_videos_not_duration(self):
-        records = [{"name": "甲", "type": "示例分类4", "date": "2026-08-01", "sec": 10} for _ in range(5)]
+        records = [{"name": "甲", "type": "口播", "date": "2026-08-01", "sec": 10} for _ in range(5)]
         _names, rows = _report_matrix(
-            records, None, None, 30, "全部", types=["示例分类4"], preferred_names=["甲"]
+            records, None, None, 30, "全部", types=["口播"], preferred_names=["甲"]
         )
         self.assertEqual(rows[3][1], 1.67)
         self.assertEqual(rows[3][2], 5)
@@ -968,12 +968,12 @@ class VideoReportTests(unittest.TestCase):
 
     def test_type_rules_gate_total_and_item_but_extra_still_counts(self):
         records = [
-            {"name": "甲", "type": "示例分类4", "date": "2026-08-01", "sec": 90},
-            {"name": "甲", "type": "示例分类3", "date": "2026-08-01", "sec": 30},
+            {"name": "甲", "type": "口播", "date": "2026-08-01", "sec": 90},
+            {"name": "甲", "type": "wsp", "date": "2026-08-01", "sec": 30},
         ]
         rules = [
-            {"name": "示例分类4", "in_total": True, "in_item": True},
-            {"name": "示例分类3", "in_total": False, "in_item": False},
+            {"name": "口播", "in_total": True, "in_item": True},
+            {"name": "wsp", "in_total": False, "in_item": False},
         ]
         _names, rows = _report_matrix(
             records,
@@ -981,7 +981,7 @@ class VideoReportTests(unittest.TestCase):
             None,
             30,
             "全部",
-            types=["示例分类4", "示例分类3"],
+            types=["口播", "wsp"],
             preferred_names=["甲"],
             type_rules=rules,
         )
@@ -992,12 +992,12 @@ class VideoReportTests(unittest.TestCase):
 
     def test_category_duration_split_uses_configured_time_rules(self):
         records = [
-            {"name": "甲", "type": "示例分类1", "date": "2026-08-01", "sec": 45},
-            {"name": "甲", "type": "示例分类1", "date": "2026-08-01", "sec": 75},
+            {"name": "甲", "type": "Flow-omini", "date": "2026-08-01", "sec": 45},
+            {"name": "甲", "type": "Flow-omini", "date": "2026-08-01", "sec": 75},
             {"name": "甲", "type": "普通", "date": "2026-08-01", "sec": 90},
         ]
         rules = [
-            {"name": "示例分类1", "in_total": True, "in_item": True, "duration_split": True},
+            {"name": "Flow-omini", "in_total": True, "in_item": True, "duration_split": True},
             {"name": "普通", "in_total": True, "in_item": False, "duration_split": False},
         ]
         duration_rules = [
@@ -1010,12 +1010,12 @@ class VideoReportTests(unittest.TestCase):
             None,
             30,
             "全部",
-            types=["示例分类1", "普通"],
+            types=["Flow-omini", "普通"],
             preferred_names=["甲"],
             type_rules=rules,
             duration_rules=duration_rules,
         )
-        self.assertEqual(rows[2][3:5], ["示例分类1", "示例分类1"])
+        self.assertEqual(rows[2][3:5], ["Flow-omini", "Flow-omini"])
         self.assertEqual(rows[3][3:6], ["1分钟内", "1分钟以上", "普通"])
         # 逐条计数排除了未勾选“按时长分类”的普通类别。
         self.assertEqual(rows[4][1:6], [7, 4, 1, 1, 1])
@@ -1024,9 +1024,9 @@ class VideoReportTests(unittest.TestCase):
         cfg = app._cfg_from_payload(
             {
                 "vd_types": [
-                    {"name": "开场示例分类4", "in_total": False, "in_item": True, "duration_split": False},
-                    {"name": "示例分类2", "in_total": False, "in_item": True, "duration_split": True},
-                    {"name": "示例分类1", "in_total": False, "in_item": True, "duration_split": True},
+                    {"name": "开场口播", "in_total": False, "in_item": True, "duration_split": False},
+                    {"name": "Flow-批量", "in_total": False, "in_item": True, "duration_split": True},
+                    {"name": "Flow-omini", "in_total": False, "in_item": True, "duration_split": True},
                 ],
                 "vd_duration_rules": [
                     {"name": "1分钟以内", "max_seconds": 60},
@@ -1039,8 +1039,8 @@ class VideoReportTests(unittest.TestCase):
 
         rules = _cfg_type_rules(cfg.vd_types)
         records = [
-            {"name": "佳佳", "type": "示例分类1", "date": "2026-08-01", "sec": 32},
-            {"name": "佳佳", "type": "示例分类2", "date": "2026-08-01", "sec": 90},
+            {"name": "佳佳", "type": "Flow-omini", "date": "2026-08-01", "sec": 32},
+            {"name": "佳佳", "type": "Flow-批量", "date": "2026-08-01", "sec": 90},
         ]
         _names, rows = _report_matrix(
             records,
@@ -1048,17 +1048,17 @@ class VideoReportTests(unittest.TestCase):
             None,
             30,
             "全部",
-            types=["开场示例分类4", "示例分类2", "示例分类1"],
+            types=["开场口播", "Flow-批量", "Flow-omini"],
             preferred_names=["佳佳"],
             type_rules=rules,
             duration_rules=cfg.vd_duration_rules,
         )
         self.assertEqual(rows[2][0], "分类")
-        self.assertGreaterEqual(rows[2].count("示例分类2"), 2)
-        self.assertGreaterEqual(rows[2].count("示例分类1"), 2)
+        self.assertGreaterEqual(rows[2].count("Flow-批量"), 2)
+        self.assertGreaterEqual(rows[2].count("Flow-omini"), 2)
         self.assertEqual(rows[3].count("1分钟以内"), 2)
         self.assertEqual(rows[3].count("一分钟以上"), 2)
-        self.assertIn("开场示例分类4", rows[3])
+        self.assertIn("开场口播", rows[3])
 
     def test_catalog_dedupe_and_date_filter_helpers(self):
         from datetime import date
@@ -1235,16 +1235,16 @@ class VideoReportTests(unittest.TestCase):
 
     def test_catalog_source_column_uses_sheet_name(self):
         self.assertEqual(
-            _attach_source_column([["姓名", "电话"], ["示例人员甲", "123"]], "来源A", True),
-            [["来源", "姓名", "电话"], ["来源A", "示例人员甲", "123"]],
+            _attach_source_column([["姓名", "电话"], ["张三", "123"]], "来源A", True),
+            [["来源", "姓名", "电话"], ["来源A", "张三", "123"]],
         )
         self.assertEqual(
-            _attach_source_column([["示例人员甲", "123"]], "来源B", False),
-            [["来源B", "示例人员甲", "123"]],
+            _attach_source_column([["张三", "123"]], "来源B", False),
+            [["来源B", "张三", "123"]],
         )
         self.assertEqual(
-            _attach_source_column([["来源", "姓名"], ["示例人员甲"]], "来源A", True),
-            [["来源", "姓名"], ["来源A", "示例人员甲"]],
+            _attach_source_column([["来源", "姓名"], ["张三"]], "来源A", True),
+            [["来源", "姓名"], ["来源A", "张三"]],
         )
 
     def test_catalog_keeps_existing_sheet_instead_of_wiping(self):

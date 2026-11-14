@@ -30,6 +30,7 @@ TOKEN_PERMISSIONS = [
     {"key": "workers_scripts", "type": "edit"},
     {"key": "dns", "type": "edit"},
     {"key": "account_settings", "type": "read"},
+    {"key": "account_analytics", "type": "read"},
 ]
 TOKEN_CREATE_URL = "https://dash.cloudflare.com/profile/api-tokens?" + urllib.parse.urlencode(
     {
@@ -42,7 +43,7 @@ TOKEN_CREATE_URL = "https://dash.cloudflare.com/profile/api-tokens?" + urllib.pa
 AUTH_HELP = (
     "请重新点「登录 Cloudflare」，用软件打开的页面创建令牌。"
     "权限需包含 Cloudflare Pages 编辑、Workers R2 Storage 编辑、"
-    "Workers Scripts 编辑、DNS 编辑、Account Settings 读取；"
+    "Workers Scripts 编辑、DNS 编辑、Account Settings 读取、Account Analytics 读取（访问统计）；"
     "账号资源选全部账号，区域选全部。"
 )
 GLOBAL_KEY_RE = re.compile(r"^[0-9a-f]{37}$", re.I)
@@ -146,6 +147,23 @@ def _safe_resource_slug(host: str, prefix: str, reserved: set[str]) -> str:
     return slug
 
 
+def _is_resumable_partial_project(project: dict[str, Any], host: str, project_name: str, site_kind: str) -> bool:
+    """Recognize only this app's generated Pages/R2 skeleton after a failed first deploy."""
+    expected_prefix = 'summary-' if site_kind == 'summary' else 'gallery-'
+    if not re.fullmatch(re.escape(expected_prefix) + r'[0-9a-f]{12}', project_name or ''):
+        return False
+    if project.get('name') != project_name or str(project.get('subdomain') or '').lower() != project_name + '.pages.dev':
+        return False
+    production = (project.get('deployment_configs') or {}).get('production') or {}
+    bucket = (production.get('r2_buckets') or {}).get('GALLERY_CACHE') or {}
+    env_vars = production.get('env_vars') or {}
+    public_base = (env_vars.get('PUBLIC_CACHE_BASE') or {}).get('value')
+    publish_secret = env_vars.get('CACHE_PUBLISH_SECRET') or {}
+    return (bucket.get('name') == project_name + '-json'
+            and public_base == f'https://{host}/cdn'
+            and publish_secret.get('type') == 'secret_text')
+
+
 def known_gallery_sites(state: dict[str, Any] | None) -> list[dict[str, Any]]:
     state = state or {}
     sites: list[dict[str, Any]] = []
@@ -173,6 +191,8 @@ def known_gallery_sites(state: dict[str, Any] | None) -> list[dict[str, Any]]:
                 "profile_id": str(item.get("profile_id") or item.get("account_id") or state.get("account_id") or ""),
                 "kind": str(item.get("kind") or "promo"),
                 "access_password": str(item.get("access_password") or (state.get("access_password") if item.get("host") == state.get("host") else "") or ""),
+                "access_password_known": bool(item.get("access_password_known", True)),
+                "provisioning": bool(item.get("provisioning", False)),
             }
         )
     return sites
@@ -315,6 +335,7 @@ class CloudflareAPI:
         token: str | None = None,
         form: list[tuple[str, Any]] | None = None,
         raw_url: bool = False,
+        raw_body: str | None = None,
     ) -> Any:
         url = path if raw_url or path.startswith("http") else API + path
         from secure_http import credential_urlopen, validate_https
@@ -344,6 +365,9 @@ class CloudflareAPI:
                     chunks.append(b"\r\n")
             chunks.append(f"--{boundary}--\r\n".encode())
             data = b"".join(chunks)
+        elif raw_body is not None:
+            data = raw_body.encode("utf-8")
+            headers["Content-Type"] = "text/plain; charset=utf-8"
         elif payload is not None:
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -434,7 +458,7 @@ class CloudflareAPI:
 
     def verify_deploy_permissions(self, account_id: str) -> None:
         try:
-            self.get(f"/accounts/{account_id}/pages/projects?per_page=1")
+            self.get(f"/accounts/{account_id}/pages/projects")
         except CloudflareError as exc:
             if is_auth_failure(exc):
                 raise CloudflareError("当前所选账号的 Pages 访问被拒绝，请核对令牌的权限与账号资源范围。\n" + str(exc), status=exc.status, code=exc.code) from exc
@@ -485,6 +509,7 @@ def _ensure_bucket(api: CloudflareAPI, account_id: str, bucket: str, log: LogFn)
     log(f"正在创建 R2 桶 {bucket} …")
     try:
         api.post(f"/accounts/{account_id}/r2/buckets", {"name": bucket})
+        log(f"R2 桶创建请求成功：{bucket}")
     except CloudflareError as exc:
         if is_auth_failure(exc):
             raise CloudflareError("创建 R2 桶失败：令牌没有 R2 权限。" + AUTH_HELP) from exc
@@ -507,6 +532,7 @@ def _ensure_project(api: CloudflareAPI, account_id: str, project: str, log: LogF
             f"/accounts/{account_id}/pages/projects",
             {"name": project, "production_branch": "production"},
         )
+        log(f"Pages 项目创建请求成功：{project}")
     except CloudflareError as exc:
         if is_auth_failure(exc):
             raise CloudflareError("创建 Pages 项目失败：令牌没有 Pages 权限。" + AUTH_HELP) from exc
@@ -536,7 +562,9 @@ def _configure_project(
     access_password: str = "",
 ) -> None:
     log("正在绑定 R2 并写入密钥 …")
+    from gallery_analytics import dataset_name
     env_cfg = {
+        "analytics_engine_datasets": {"GALLERY_ANALYTICS": {"dataset": dataset_name(project)}},
         "compatibility_date": "2024-11-01",
         "compatibility_flags": ["nodejs_compat"],
         "r2_buckets": {"GALLERY_CACHE": {"name": bucket}},
@@ -591,12 +619,12 @@ def _create_deployment(
     manifest: dict[str, str],
     worker: bytes,
     log: LogFn,
-    *, routes: bytes | None = None, headers: bytes | None = None,
+    *, routes: bytes | None = None, headers: bytes | None = None, production_branch: str = "production",
 ) -> dict[str, Any]:
     log("正在发布 Pages 部署 …")
     form = [
         ("manifest", json.dumps(manifest, separators=(",", ":"))),
-        ("branch", "production"),
+        ("branch", production_branch),
         ("commit_dirty", "true"),
         ("commit_message", "gallery one-click deploy"),
         ("_worker.js", ("_worker.js", worker, "application/javascript+module")),
@@ -607,6 +635,43 @@ def _create_deployment(
         form.append(("_headers", ("_headers", headers, "text/plain")))
     data = api.result(api.post(f"/accounts/{account_id}/pages/projects/{project}/deployments", form=form))
     return data if isinstance(data, dict) else {}
+
+
+def wait_for_deployment(api, account_id, project, deployment, log=lambda _: None):
+    """Do not report a submitted/failed deployment as a live website."""
+    if not deployment.get("id"):
+        raise CloudflareError("Cloudflare 未返回部署编号，请检查项目记录")
+    log(f"Cloudflare 已接收部署 {deployment['id']}，正在等待构建完成 …")
+    for _ in range(30):
+        current = api.result(api.get(f"/accounts/{account_id}/pages/projects/{project}/deployments/{deployment['id']}")) or {}
+        stage = current.get("latest_stage") or {}
+        if stage.get("name") == "deploy" and stage.get("status") == "success":
+            log("Cloudflare Pages 构建与部署已成功")
+            return
+        if stage.get("status") in ("failure", "canceled"):
+            failed_stage = stage.get('name') or next((item.get('name') for item in current.get('stages') or []
+                if item.get('status') in ('failure','canceled')), 'unknown')
+            log(f"Cloudflare Pages 阶段 {failed_stage} 状态：{stage.get('status')}，正在读取部署日志 …")
+            details = ''
+            try:
+                response = api.result(api.get(
+                    f"/accounts/{account_id}/pages/projects/{project}/deployments/{deployment['id']}/history/logs")) or {}
+                rows = response.get('data') if isinstance(response,dict) else []
+                lines = [str(item.get('line') or '').strip() for item in rows or [] if isinstance(item,dict)]
+                lines = [line for line in lines if line]
+                # Logs are shown locally; still mask common credential forms and cap output.
+                lines = [re.sub(r'(?i)(CACHE_PUBLISH_SECRET|ACCESS_PASSWORD|authorization|bearer)\s*[:=]\s*[^\s,;]+',r'\1=[已隐藏]',line)
+                         for line in lines[-24:]]
+                details = '\n'.join(line[:500] for line in lines)
+                if details: log('部署错误日志：\n' + details[-6000:])
+            except Exception as exc:
+                log(f"暂时无法读取 Cloudflare 部署日志：{exc}")
+            message = f"图库部署失败（阶段：{failed_stage}，状态：{stage.get('status')}），没有报告为成功。"
+            if details: message += '\nCloudflare 部署日志：\n' + details[-6000:]
+            else: message += '\n软件未能读取具体错误，请在 Cloudflare Pages 项目的 Deployments → View build logs 查看。'
+            raise CloudflareError(message)
+        time.sleep(1)
+    raise CloudflareError("图库部署仍在处理中，请在 Cloudflare 检查本次部署，暂勿重复创建")
 
 
 def _attach_domain(api: CloudflareAPI, account_id: str, project: str, host: str, log: LogFn) -> str:
@@ -662,7 +727,7 @@ def _attach_domain(api: CloudflareAPI, account_id: str, project: str, host: str,
 
 
 def deploy_gallery(
-    host: str,
+    host: str = "",
     *,
     token: str = "",
     account_id: str = "",
@@ -672,12 +737,28 @@ def deploy_gallery(
     profile_id: str = "",
     force_update: bool = False,
     create_if_missing: bool = False,
+    project_name: str = "",
 ) -> dict[str, Any]:
     """Login must already have stored a token, or pass token=."""
     log = log or (lambda m: None)
     host = normalize_host(host)
-    if not host or "." not in host:
-        raise CloudflareError("请填写网站域名，例如 gallery.example.com")
+    if site_kind not in ('summary','promo'):
+        raise CloudflareError('不支持的网站类型，未创建或更新项目')
+    project_name = str(project_name or "").strip().lower()
+    if not host:
+        if not create_if_missing:
+            raise CloudflareError("请从站点列表选择已有站点；创建新站点无需填写域名")
+        project_name = project_name or ('summary-' if site_kind == 'summary' else 'gallery-') + secrets.token_hex(6)
+        if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,56}[a-z0-9])?',project_name):
+            raise CloudflareError("项目名称只能包含小写字母、数字和连字符，最长 58 个字符")
+        if project_name in RESERVED_PAGES_PROJECTS:
+            raise CloudflareError("此项目名称已保留，请使用其他名称")
+        host = project_name + '.pages.dev'
+    elif '.' not in host:
+        raise CloudflareError("请填写有效的自定义域名，或取消使用自定义域名")
+    pages_only = host.endswith('.pages.dev')
+    if pages_only and not re.fullmatch(r'[a-z0-9-]+\.pages\.dev',host):
+        raise CloudflareError("请使用固定的项目 Pages 地址，不要使用随机预览地址")
     state = load_cf_state()
     token = (token or state.get("api_token") or "").strip()
     account_id = (account_id or state.get("account_id") or "").strip()
@@ -690,14 +771,29 @@ def deploy_gallery(
     if previous and previous.get('account_id') and previous['account_id'] != account_id:
         raise CloudflareError("该域名已属于另一个账号的站点，不会覆盖。请选择正确账号。")
     if previous and previous.get('kind', 'promo') != site_kind:
-        raise CloudflareError("该域名已用于另一种图库，不能覆盖。请为新的汇总图库使用独立域名。")
+        raise CloudflareError("所选站点类型与本地记录不符，未覆盖。请选择与当前配置类型一致的独立站点。")
     from gallery_management import find_project, validate_project, connect_existing
     remote = find_project(api, account_id, host, project_hint=(previous or {}).get('project', ''))
+    resume_partial = False
     if remote:
         if not previous:
-            raise CloudflareError('此域名已经部署过。请导入原电脑配置，或使用“连接已有站点”填写原发布密钥；不会新建项目或更换密钥。')
+            candidate_name = project_name or host.removesuffix('.pages.dev')
+            if not (create_if_missing and pages_only and
+                    _is_resumable_partial_project(remote, host, candidate_name, site_kind)):
+                raise CloudflareError('此域名已经部署过。请导入原电脑配置，或使用“连接已有站点”填写原发布密钥；不会新建项目或更换密钥。')
+            project = candidate_name
+            bucket = project + '-json'
+            # The first attempt generated a key but could not save it before the
+            # deployment failed. Rotate it while resuming this verified app-owned
+            # skeleton; ACCESS_PASSWORD is left untouched in Cloudflare.
+            secret = generate_publish_secret()
+            previous = {'host':host,'project':project,'bucket':bucket,'secret':secret,
+                'account_id':account_id,'profile_id':profile_id or account_id,'kind':site_kind,
+                'access_password':'','access_password_known':False,'provisioning':True}
+            resume_partial = True
+            log('检测到本工具上次创建但未完成的 Pages/R2 站点；复用现有资源并恢复部署，不重复创建 R2 桶。')
         validate_project(remote, previous)
-        if not force_update:
+        if not force_update and not previous.get('provisioning'):
             if site_kind == 'summary':
                 return connect_existing(api, account_id, host, previous.get('secret', ''), kind=site_kind,
                                         profile_id=profile_id, project_hint=previous['project'], log=log)
@@ -713,10 +809,19 @@ def deploy_gallery(
     if site_kind == 'summary' and not resources['reused']:
         resources['project'] = _safe_resource_slug(host, 'summary', RESERVED_PAGES_PROJECTS)
         resources['bucket'] = _safe_resource_slug(host, 'summary-json', RESERVED_R2_BUCKETS)
+    if pages_only and not previous:
+        resources['project'] = host.removesuffix('.pages.dev')
+        if resources['project'] in RESERVED_PAGES_PROJECTS:
+            raise CloudflareError('此项目名称已保留，请使用其他名称')
+        resources['bucket'] = resources['project'] + '-json'
     project = resources["project"]
     bucket = resources["bucket"]
     secret = resources["secret"]
-    if resources["reused"]:
+    if resume_partial:
+        project = previous['project'];bucket = previous['bucket'];secret = previous['secret']
+    if resume_partial:
+        log(f"恢复未完成站点：复用 Pages {project} / R2 {bucket}，不重复创建资源")
+    elif resources["reused"]:
         log(f"同一域名，更新已有站点：Pages {project} / R2 {bucket}")
     else:
         log(f"新域名，新建独立站点：Pages {project} / R2 {bucket}（不会覆盖已有图库）")
@@ -746,12 +851,42 @@ def deploy_gallery(
             raise CloudflareError('生成的项目名已存在，未覆盖；请连接原站点或使用不同域名。')
         _ensure_bucket(api, account_id, bucket, log)
         _ensure_project(api, account_id, project, log)
+        if pages_only:
+            created = api.result(api.get(f"/accounts/{account_id}/pages/projects/{project}")) or {}
+            assigned = str(created.get('subdomain') or '').lower()
+            if created.get('name') != project or not re.fullmatch(r'[a-z0-9-]+\.pages\.dev',assigned):
+                raise CloudflareError('无法核验 Cloudflare 分配的 Pages 地址，未继续配置或上传')
+            host = assigned
+            public_base = f"https://{host}/cdn"
         _configure_project(
             api, account_id, project, bucket, secret, public_base, log, access_password=access_password
         )
     else:
         access_password = str(previous.get('access_password') or '')
-        log('仅更新原项目网页，沿用线上环境变量与发布密钥；修改密码请使用独立按钮。')
+        from gallery_analytics import ensure_binding
+        ensure_binding(api, account_id, remote)
+        if resume_partial:
+            log('恢复发布密钥（只替换 CACHE_PUBLISH_SECRET，保留线上访问密码）…')
+            api.patch(f"/accounts/{account_id}/pages/projects/{project}", {
+                'deployment_configs': {
+                    mode:{'env_vars':{'CACHE_PUBLISH_SECRET':{'type':'secret_text','value':secret}}}
+                    for mode in ('production','preview')
+                }
+            })
+        log('更新原项目网页和访问分析绑定，保留素材、密码与密钥。')
+    site_url = f"https://{host}"
+    pages_url = f"https://{host}" if pages_only else 'https://' + str((remote or {}).get('subdomain') or f'{project}.pages.dev')
+    publish_url = site_url + ('/api/summary-publish' if site_kind=='summary' else '/api/publish-cache')
+    pending_entry = {
+        'host':host,'project':project,'bucket':bucket,'secret':secret,'publish_url':publish_url,
+        'site_url':site_url,'pages_url':pages_url,'account_id':account_id,
+        'profile_id':profile_id or account_id,'kind':site_kind,'access_password':access_password,
+        'access_password_known':not resume_partial,'provisioning':True,
+    }
+    save_cf_state({'account_id':account_id,'host':host,'project':project,'bucket':bucket,
+        'secret':secret,'publish_url':publish_url,'site_url':site_url,
+        'sites':[item for item in known_gallery_sites(state) if item['host']!=host]+[pending_entry]})
+    log('已把站点和发布密钥安全保存到本机；部署中断后可从“已有网站”继续更新。')
     files = collect_static_files(site_dir, host)
     if not files:
         raise CloudflareError("站点目录里没有可上传的静态文件")
@@ -761,12 +896,14 @@ def deploy_gallery(
     headers_path = site_dir / '_headers'
     deployment = _create_deployment(api, account_id, project, manifest, worker, log,
                                     routes=routes_path.read_bytes() if routes_path.exists() else None,
-                                    headers=headers_path.read_bytes() if headers_path.exists() else None)
-    site_url = _attach_domain(api, account_id, project, host, log)
+                                    headers=headers_path.read_bytes() if headers_path.exists() else None,
+                                    production_branch=(remote or {}).get("production_branch") or "production")
+    wait_for_deployment(api, account_id, project, deployment, log)
+    site_url = f"https://{host}" if pages_only else _attach_domain(api, account_id, project, host, log)
     publish_url = f"{site_url.rstrip('/')}/api/publish-cache"
     if site_kind == 'summary':
         publish_url = f"{site_url.rstrip('/')}/api/summary-publish"
-    pages_url = f"https://{project}.pages.dev"
+    pages_url = f"https://{host}" if pages_only else "https://" + str((remote or {}).get("subdomain") or f"{project}.pages.dev")
     result = {
         "ok": True,
         "host": host,
@@ -780,6 +917,7 @@ def deploy_gallery(
         "publish_url": publish_url,
         "kind": site_kind,
         "profile_id": profile_id or account_id,
+        "access_password_known": not resume_partial,
         "cdn_manifest_url": f"{public_base}/promo/manifest.json",
         "deployment_id": str(deployment.get("id") or ""),
         "deployment_url": str(deployment.get("url") or pages_url),
@@ -796,6 +934,8 @@ def deploy_gallery(
         "profile_id": profile_id or account_id,
         "kind": site_kind,
         "access_password": access_password,
+        "access_password_known": not resume_partial,
+        "provisioning": False,
     }
     sites = [item for item in known_gallery_sites(state) if item.get("host") != host]
     sites.append(site_entry)

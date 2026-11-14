@@ -6,7 +6,7 @@
     <meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
     <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
     <title>每日推广引流数据更新</title>
-    <link rel="stylesheet" href="assets/styles.css?v=20260801-refresh-cdn-btn">
+    <link rel="stylesheet" href="assets/styles.css?v=20261114-hide-channel">
   </head>
   <body>
     <section class="auth-screen" id="authGate">
@@ -49,10 +49,10 @@
             class="ghost-button is-warn"
             id="refreshCdnBtn"
             type="button"
-            title="把 Drive 最新导出镜像到 CDN。会消耗 Drive/Worker 配额，请慎重点击"
+            title="重新读取当前 Cloudflare R2 JSON 缓存，不会访问 Drive，也不会写入 CDN"
           >
             <span aria-hidden="true">☁</span>
-            刷新CDN
+            刷新JSON缓存
           </button>
           <input class="visually-hidden" id="csvImportInput" type="file" accept=".csv,text/csv">
           <button class="ghost-button" id="csvImportBtn" type="button" title="从 Google Sheets 下载的 CSV 导入本地缓存">
@@ -91,7 +91,7 @@
         <div class="filter-grid">
           <label class="field wide-field">
             <span>搜索</span>
-            <input id="searchInput" type="search" placeholder="名字 / 美工 / 渠道 / 专页名（空格可多词）" autocomplete="off">
+            <input id="searchInput" type="search" placeholder="名字 / 美工 / 专页名（空格可多词）" autocomplete="off">
           </label>
 
           <label class="field">
@@ -115,13 +115,6 @@
             <span>来源</span>
             <select id="sourceTypeFilter">
               <option value="">全部来源类型</option>
-            </select>
-          </label>
-
-          <label class="field">
-            <span>渠道</span>
-            <select id="sourceChannelFilter">
-              <option value="">全部来源渠道</option>
             </select>
           </label>
 
@@ -175,7 +168,7 @@
 
         <div class="empty-state" id="emptyState" hidden>
           <h3>没有匹配的数据</h3>
-          <p>请先点「清空」再搜。若名字在表里是「未找到」，请搜美工/渠道名，或修复表格 A 列后重新导出。也可点「同步」刷新本地缓存。</p>
+          <p>请先点「清空」再搜。若名字在表里是「未找到」，请搜美工或专页名，或修复表格 A 列后重新导出。也可点「同步」刷新本地缓存。</p>
         </div>
 
         <div class="load-more-row">
@@ -215,14 +208,15 @@
        */
       // 日更镜像后的 CDN（publish-cache 成功后启用；未发布前可先用 Drive）
       window.Q_GALLERY_DRIVE_CACHE_MANIFEST_URL =
-        "https://gallery-cache.example.com/promo/manifest.json";
+        "";
       // Drive 上游（CDN 404 时用 JSON同步粘贴，或临时改回这行）
       window.Q_GALLERY_DRIVE_FALLBACK_MANIFEST_URL =
-        "https://drive.google.com/uc?export=download&id=EXAMPLE_IDENTIFIER_0060";
+        "";
       window.Q_GALLERY_ENABLE_APPS_SCRIPT_SYNC = false;
       // 本地缓存最长视为新鲜的时间（默认 6 小时）
       // window.Q_GALLERY_LOCAL_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
     </script>
-    <script src="assets/app.js?v=20260903-drive-img" defer></script>
-  </body>
+    <script src="assets/app.js?v=20261114-water-card-date" defer></script>
+  <script defer src="/visit-beacon.js"></script>
+</body>
 </html>

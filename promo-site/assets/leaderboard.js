@@ -14,7 +14,7 @@ function getManifestUrl() {
   return (
     window.Q_GALLERY_DRIVE_CACHE_MANIFEST_URL ||
     window.Q_GALLERY_DRIVE_FALLBACK_MANIFEST_URL ||
-    "https://gallery-cache.example.com/promo/manifest.json"
+    ""
   );
 }
 const DIRECT_CACHE_URL =
@@ -218,8 +218,8 @@ async function syncSharedCacheSnapshot() {
   const candidates = [
     getManifestUrl(),
     window.Q_GALLERY_DRIVE_FALLBACK_MANIFEST_URL || "",
-    "https://gallery-cache.example.com/promo/manifest.json",
-    "https://drive.google.com/uc?export=download&id=EXAMPLE_IDENTIFIER_0060"
+    "",
+    ""
   ].filter(Boolean);
 
   for (const manifestUrl of [...new Set(candidates)]) {
@@ -287,7 +287,7 @@ async function fetchManifestAllChunks(manifestUrl) {
 async function fetchJsonUrl(url) {
   const text = String(url || "");
   const isCdn =
-    /zhixianglife\.com|r2\.dev|cloudflarestorage\.com|pages\.dev/i.test(text) || text.startsWith("/");
+    /r2\.dev|cloudflarestorage\.com|pages\.dev/i.test(text) || text.startsWith("/") || new URL(text, window.location.href).origin === window.location.origin;
   try {
     const response = await fetch(text, {
       cache: isCdn ? "default" : "no-store",
@@ -362,6 +362,7 @@ function normalizeSnapshotRecord(row, runId) {
     date: row.date,
     authorName: row.authorName || row.maker || "",
     maker: row.maker || row.authorName || "",
+    authorId: row.authorId || row.pageId || row["专页id"] || row["专页ID"] || "",
     avatarUrl: row.avatarUrl || "",
     cacheRunId: runId
   });
@@ -393,12 +394,17 @@ function render() {
 function buildRankedRecords(records, range) {
   return records
     .filter(record => toNumber(record[rankMetric.key]) > 0)
-    .filter(record => isInsideRange(record[rankMetric.dateKey], range.start, range.end))
+    .filter(record => isInsideRange(getRankDate(record), range.start, range.end))
     .sort((a, b) => {
       const metricDiff = toNumber(b[rankMetric.key]) - toNumber(a[rankMetric.key]);
       if (metricDiff) return metricDiff;
-      return dateNumber(b[rankMetric.dateKey]) - dateNumber(a[rankMetric.dateKey]);
+      return dateNumber(getRankDate(b)) - dateNumber(getRankDate(a));
     });
+}
+
+function getRankDate(record) {
+  if (rankMetric.key === "water") return record.waterTime || record.date;
+  return record[rankMetric.dateKey];
 }
 
 function renderRows() {
@@ -414,10 +420,9 @@ function renderRows() {
       metricCell(record),
       nameTextCell(record),
       nameImageCell(record),
-      sourceChannelCell(record),
       tableCell(record.sourceType, "source-type-cell"),
       tableCell(getCopyText(record), "copy-cell"),
-      tableCell(formatMetricDate(record[rankMetric.dateKey]), "date-cell"),
+      tableCell(formatMetricDate(getRankDate(record)), "date-cell"),
       linkCell(record.postLink)
     );
     fragment.append(tr);
@@ -472,7 +477,7 @@ function avatarCell(record) {
   }
 
   const img = document.createElement("img");
-  img.alt = record.sourceChannel || record.name || "头像";
+  img.alt = record.pageName || record.authorName || record.name || "头像";
   img.loading = "lazy";
   // Facebook 图床对 no-referrer 更友好；gyazo 等同理
   img.referrerPolicy = "no-referrer";
@@ -523,9 +528,21 @@ function resolveAvatarUrls(record) {
   };
 
   push(record.avatarUrl);
+  // 当前表头“头像”在 H 列（index 7）；保留 T 列兼容旧缓存。
+  push(Array.isArray(record.raw) ? record.raw[7] : "");
   push(Array.isArray(record.raw) ? record.raw[19] : "");
 
-  const authorId = extractFacebookId(record.authorName || record.maker || record.authorId);
+  // authorName/maker 常是中文名称，不能用 `||` 抢在数值 ID 前面。
+  // 新表头的专页 ID 在 C 列，由发布缓存写入 authorId；旧缓存继续尝试 raw 和链接。
+  const authorIds = [
+    record.authorId,
+    record.pageId,
+    record.raw?.[2],
+    record.authorName,
+    record.maker,
+    record.raw?.[17]
+  ].map(extractFacebookId).filter(Boolean);
+  const authorId = [...new Set(authorIds)];
   const link = record.postLink || record.sourceUrl || "";
   const pageId = extractFacebookPageId(link);
   const groupId = extractFacebookGroupId(link);
@@ -536,65 +553,19 @@ function resolveAvatarUrls(record) {
   if (isPage) {
     // 专页：作者个人 ID 常无权限，Page ID 才能出真头像
     pushId(pageId);
-    pushId(authorId);
+    authorId.forEach(pushId);
   } else if (isGroup) {
     // 小组：先发帖作者；再试小组 ID（部分 token 可出图）
-    pushId(authorId);
+    authorId.forEach(pushId);
     pushId(groupId);
   } else {
-    pushId(authorId);
+    authorId.forEach(pushId);
     pushId(pageId);
     pushId(groupId);
   }
 
   push(Array.isArray(record.raw) ? record.raw[17] : "");
   return list;
-}
-
-/** 来源渠道单元格：名字前加专页/小组头像 */
-function sourceChannelCell(record) {
-  const td = document.createElement("td");
-  td.className = "title-cell source-channel-cell";
-  const text = stringOr(record.sourceChannel) || "-";
-  td.title = text;
-
-  const wrap = document.createElement("div");
-  wrap.className = "channel-with-avatar";
-
-  const link = record.postLink || record.sourceUrl || "";
-  const pageId = extractFacebookPageId(link);
-  const groupId = extractFacebookGroupId(link);
-  const channelId = pageId || groupId;
-  const label = document.createElement("span");
-  label.className = "channel-label";
-  label.textContent = text;
-
-  if (channelId) {
-    const img = document.createElement("img");
-    img.className = "channel-avatar";
-    img.alt = "";
-    img.loading = "lazy";
-    img.referrerPolicy = "no-referrer";
-    img.src = `/api/avatar?id=${encodeURIComponent(channelId)}&w=64`;
-    img.addEventListener("error", () => {
-      img.remove();
-      const fb = document.createElement("span");
-      fb.className = "channel-avatar-fallback";
-      fb.textContent = text.slice(0, 1) || (groupId ? "组" : "页");
-      wrap.insertBefore(fb, label);
-    });
-    img.addEventListener("load", () => {
-      if (img.naturalWidth > 0 && img.naturalWidth <= 50) {
-        img.dispatchEvent(new Event("error"));
-      }
-    });
-    wrap.append(img, label);
-  } else {
-    wrap.append(label);
-  }
-
-  td.append(wrap);
-  return td;
 }
 
 /** Facebook Graph / fbcdn 直链 → 同域代理（国内可加载） */
@@ -644,6 +615,8 @@ function extractFacebookId(value) {
   if (/^\d{8,}$/.test(trimmed)) return trimmed;
   const idParam = text.match(/[?&]id=(\d{8,})/i);
   if (idParam) return idParam[1];
+  const pageUrlId = text.match(/(?:fb\.com|facebook\.com)\/(\d{8,})(?:_\d+)?(?:[/?#]|$)/i);
+  if (pageUrlId) return pageUrlId[1];
   // 勿用 replace 去非数字：会把 groups/A/posts/B 拼成 AB
   return "";
 }
@@ -670,7 +643,7 @@ function extractFacebookGroupId(value) {
 function avatarFallback(record) {
   const fallback = document.createElement("span");
   fallback.className = "avatar-fallback";
-  fallback.textContent = stringOr(record.sourceChannel || record.name).slice(0, 1) || "-";
+  fallback.textContent = stringOr(record.pageName || record.authorName || record.name).slice(0, 1) || "-";
   return fallback;
 }
 
@@ -937,7 +910,7 @@ function getRangeWindow(range, records = []) {
 function getFallbackRangeWindow(range, records = []) {
   const metricRecords = records
     .filter(record => toNumber(record[rankMetric.key]) > 0)
-    .map(record => parseRecordDate(record[rankMetric.dateKey]))
+    .map(record => parseRecordDate(getRankDate(record)))
     .filter(Boolean)
     .sort((a, b) => b.getTime() - a.getTime());
   if (!metricRecords.length) return null;
@@ -1012,6 +985,7 @@ function normalizeRecord(input) {
     sourceChannel: stringOr(input.sourceChannel),
     sourceType: stringOr(input.sourceType),
     avatarUrl: stringOr(input.avatarUrl),
+    authorId: stringOr(input.authorId || input.pageId || input["专页id"] || input["专页ID"]),
     authorName: stringOr(input.authorName || input.maker || input.authorId || ""),
     maker: stringOr(input.maker || input.authorName || ""),
     mediaMode: stringOr(input.mediaMode),
@@ -1034,8 +1008,7 @@ function isVideoRecord(record) {
 }
 
 function isHeaderRecord(record) {
-  return Number(record.rowNumber) <= 2
-    || record.postId === "帖文ID"
+  return record.postId === "帖文ID"
     || record.postLink === "贴文链接"
     || record.lead === "引流"
     || record.water === "水滴"
@@ -1094,7 +1067,10 @@ function toNumber(value) {
   const text = stringOr(value).replace(/,/g, "");
   if (!text) return 0;
   const number = Number.parseFloat(text.replace("%", ""));
-  return Number.isFinite(number) ? number : 0;
+  if (!Number.isFinite(number)) return 0;
+  const suffix = text.match(/[kKmM万亿]/);
+  const multiplier = !suffix ? 1 : /k/i.test(suffix[0]) ? 1000 : /m/i.test(suffix[0]) ? 1000000 : suffix[0] === "万" ? 10000 : 100000000;
+  return number * multiplier;
 }
 
 function dateNumber(value) {
