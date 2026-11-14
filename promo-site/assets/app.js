@@ -26,7 +26,7 @@ function getManifestUrl() {
 }
 // 兼容旧代码引用
 const DIRECT_CACHE_MANIFEST_URL = window.Q_GALLERY_DRIVE_CACHE_MANIFEST_URL || "";
-const SNAPSHOT_NORMALIZATION_VERSION = "map5-category-topic";
+const SNAPSHOT_NORMALIZATION_VERSION = "map6-merged-category-values";
 const DIRECT_CACHE_URLS = Array.isArray(window.Q_GALLERY_DRIVE_CACHE_URLS)
   ? window.Q_GALLERY_DRIVE_CACHE_URLS.filter(Boolean)
   : [];
@@ -1703,13 +1703,13 @@ function rebuildCatalogs(serverCatalogs) {
     postTypes: new Map()
   };
 
-  (serverCatalogs?.categories || []).forEach(value => addCatalogValue(values.categories, value));
+  (serverCatalogs?.categories || []).forEach(value => addCategoryCatalogValue(values.categories, value));
   (serverCatalogs?.sourceTypes || []).forEach(value => addCatalogValue(values.sourceTypes, value));
   (serverCatalogs?.postTypes || []).forEach(value => addCatalogValue(values.postTypes, value));
 
   state.records.forEach(record => {
-    addCatalogValue(values.categories, record.category);
-    addCatalogValue(values.categories, record.topicType);
+    addCategoryCatalogValue(values.categories, record.category);
+    addCategoryCatalogValue(values.categories, record.topicType);
     addCatalogValue(values.sourceTypes, record.sourceType);
     addCatalogValue(values.postTypes, record.postType);
   });
@@ -1742,6 +1742,13 @@ function addCatalogValue(map, value) {
   if (!display || isCatalogHeaderValue(display)) return;
   const key = display.toLocaleLowerCase("zh-Hans-CN").replace(/\s+/g, "");
   if (!map.has(key)) map.set(key, display);
+}
+
+function addCategoryCatalogValue(map, value) {
+  const display = normalizeCatalogValue(value);
+  // 图片/视频是媒体类型，不是表格 T/W 列的分类值；分类菜单只展示实际题材分类。
+  if (!display || ["图片", "视频"].includes(display)) return;
+  addCatalogValue(map, display);
 }
 
 function pickDesignerField(input) {

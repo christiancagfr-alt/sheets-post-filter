@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.5.23"
+  #define MyAppVersion "1.5.24"
 #endif
 
 #define MyAppName "数据汇总工具"
