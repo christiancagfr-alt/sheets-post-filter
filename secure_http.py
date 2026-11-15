@@ -23,4 +23,12 @@ def validate_https(url, *, hosts=None):
 
 def credential_urlopen(request, timeout):
     validate_https(request.full_url)
-    return build_opener(NoRedirect(), HTTPSHandler(context=ssl.create_default_context())).open(request, timeout=timeout)
+    try:
+        # Frozen macOS Python does not always discover the system trust store.
+        # certifi is bundled with the application, so use its CA roots explicitly.
+        import certifi
+
+        context = ssl.create_default_context(cafile=certifi.where())
+    except (ImportError, OSError):
+        context = ssl.create_default_context()
+    return build_opener(NoRedirect(), HTTPSHandler(context=context)).open(request, timeout=timeout)

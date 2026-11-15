@@ -154,6 +154,15 @@ def _bring_existing_window() -> bool:
     launch look like the app opened and immediately quit.
     """
     try:
+        if sys.platform == "darwin":
+            result = subprocess.run(
+                ["osascript", "-e", 'tell application id "com.secure-artifacts.sheets-post-filter" to activate'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+            return result.returncode == 0
         import ctypes
         from ctypes import wintypes
 
@@ -195,6 +204,14 @@ def _bring_existing_window() -> bool:
 def _pids_listening_on_mutex() -> list[int]:
     pids: list[int] = []
     try:
+        if sys.platform == "darwin":
+            out = subprocess.check_output(
+                ["lsof", "-nP", "-t", f"-iTCP:{MUTEX_PORT}", "-sTCP:LISTEN"],
+                text=True,
+                errors="replace",
+                timeout=5,
+            )
+            return sorted({int(value) for value in out.split() if value.isdigit()})
         out = subprocess.check_output(
             ["netstat", "-ano", "-p", "tcp"],
             text=True,
@@ -219,6 +236,14 @@ def _pids_listening_on_mutex() -> list[int]:
 
 def _process_name(pid: int) -> str:
     try:
+        if sys.platform == "darwin":
+            out = subprocess.check_output(
+                ["ps", "-p", str(pid), "-o", "comm="],
+                text=True,
+                errors="replace",
+                timeout=5,
+            )
+            return Path(out.strip()).name
         out = subprocess.check_output(
             ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
             text=True,
@@ -236,6 +261,17 @@ def _process_name(pid: int) -> str:
 def _is_own_python_process(pid: int) -> bool:
     """A shared port and python.exe name do not prove process ownership."""
     import shlex
+    if sys.platform == "darwin":
+        try:
+            output = subprocess.check_output(
+                ["ps", "-p", str(pid), "-o", "command="],
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            ).decode("utf-8", errors="replace")
+            wanted = str((RESOURCE_DIR / "desktop_app.py").resolve())
+            return wanted in output
+        except (OSError, subprocess.SubprocessError):
+            return False
     shell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
     command = (
         "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
@@ -261,6 +297,18 @@ def _kill_stale_mutex() -> bool:
         if pid == my_pid:
             continue
         name = _process_name(pid)
+        if sys.platform == "darwin":
+            app_name = Path(sys.executable).name
+            own_frozen_app = bool(getattr(sys, "frozen", False) and name == app_name)
+            own_script = name.lower() in ("python", "python3", "python3.11", "python3.12") and _is_own_python_process(pid)
+            if not (own_frozen_app or own_script):
+                continue
+            try:
+                os.kill(pid, 15)
+                killed = True
+            except OSError:
+                continue
+            continue
         if "数据汇总工具" not in name and name.lower() not in ("python.exe", "pythonw.exe"):
             continue
         if name.lower() in ("python.exe", "pythonw.exe") and not _is_own_python_process(pid):

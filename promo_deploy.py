@@ -69,7 +69,12 @@ SKIP_SUFFIXES = {".md", ".map"}
 
 
 def _ssl_ctx() -> ssl.SSLContext:
-    return ssl.create_default_context()
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except (ImportError, OSError):
+        return ssl.create_default_context()
 
 
 def token_store_path() -> Path:
