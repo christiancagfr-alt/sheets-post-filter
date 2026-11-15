@@ -114,6 +114,23 @@ a = Analysis(
     noarchive=False,
 )
 
+if sys.platform == "darwin":
+    # cryptography's macOS wheel can require a newer OpenSSL 3 symbol than the
+    # libssl shipped with python.org Python. Use one compatible OpenSSL 3 pair
+    # for both Python's _ssl module and cryptography's Rust extension.
+    import subprocess
+
+    openssl_prefix = Path(
+        subprocess.check_output(["brew", "--prefix", "openssl@3"], text=True).strip()
+    )
+    openssl_libs = [openssl_prefix / "lib" / name for name in ("libssl.3.dylib", "libcrypto.3.dylib")]
+    missing = [str(path) for path in openssl_libs if not path.is_file()]
+    if missing:
+        raise SystemExit("Missing Homebrew OpenSSL 3 libraries: " + ", ".join(missing))
+    replacement_names = {path.name for path in openssl_libs}
+    a.binaries = [item for item in a.binaries if Path(item[0]).name not in replacement_names]
+    a.binaries.extend((path.name, str(path), "BINARY") for path in openssl_libs)
+
 a.datas = [
     item
     for item in a.datas

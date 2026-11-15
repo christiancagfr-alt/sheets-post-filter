@@ -19,6 +19,18 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+if os.environ.get("SHEETS_POST_FILTER_SMOKE_TEST") == "1":
+    import certifi
+    import cryptography
+    import gspread
+    import ssl
+
+    ssl.create_default_context(cafile=certifi.where())
+    from google.auth.crypt import RSASigner  # noqa: F401
+
+    print("Bundled Google auth, cryptography, and CA bundle loaded.")
+    raise SystemExit(0)
+
 # 源码版也沿用已安装版本的配置、服务账号和运行状态。这样无论通过
 # 启动脚本还是直接执行 desktop_app.py，都不会误读源码目录中的空配置。
 if not os.environ.get("SHEETS_POST_FILTER_DATA_DIR"):
