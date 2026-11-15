@@ -193,16 +193,33 @@ jobs:
           ditto -c -k --keepParent "$STAGE" "release/$ASSET"
           ls -lh "release/$ASSET"
 
+      - name: Package macOS dmg
+        run: |
+          set -euo pipefail
+          APP="dist/数据汇总工具.app"
+          test -d "$APP"
+          DMG_STAGE="$RUNNER_TEMP/dmg-stage"
+          mkdir -p "$DMG_STAGE"
+          cp -R "$APP" "$DMG_STAGE/"
+          ln -s /Applications "$DMG_STAGE/Applications"
+          ASSET="data-summary-tool-macos-${{ matrix.arch }}-v${VERSION}.dmg"
+          hdiutil create -volname "数据汇总工具" -srcfolder "$DMG_STAGE" -ov -format UDZO "release/$ASSET"
+          ls -lh "release/$ASSET"
+
       - name: Attest macOS asset
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-path: release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.zip
+          subject-path: |
+            release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.zip
+            release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.dmg
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-${{ matrix.arch }}
-          path: release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.zip
+          path: |
+            release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.zip
+            release/data-summary-tool-macos-${{ matrix.arch }}-v${{ steps.meta.outputs.version }}.dmg
 
   publish-release:
     permissions:
@@ -223,8 +240,8 @@ jobs:
           VERSION: ${{ needs.windows-release.outputs.version }}
         run: |
           set -euo pipefail
-          find artifacts -type f \( -name '*.zip' -o -name '*.exe' \) -print
-          mapfile -t FILES < <(find artifacts -type f \( -name '*.zip' -o -name '*.exe' \))
+          find artifacts -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.dmg' \) -print
+          mapfile -t FILES < <(find artifacts -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.dmg' \))
           TAG="v${VERSION}"
           NOTES="$(cat <<EOF
           数据汇总工具 ${TAG}
@@ -233,8 +250,9 @@ jobs:
           - Windows 便携版：\`data-summary-tool-windows-v${VERSION}.zip\`
           - macOS Apple Silicon：\`data-summary-tool-macos-arm64-v${VERSION}.zip\`
           - macOS Intel：\`data-summary-tool-macos-x86_64-v${VERSION}.zip\`（若本次构建成功）
+          - macOS 安装镜像：\`data-summary-tool-macos-arm64-v${VERSION}.dmg\` 和 \`data-summary-tool-macos-x86_64-v${VERSION}.dmg\`
 
-          Mac：解压后把「数据汇总工具.app」拖到「应用程序」。若提示无法打开，按住 Control 点图标选打开。
+          Mac ZIP：解压后把「数据汇总工具.app」拖到「应用程序」。DMG：打开镜像后把 App 拖到「Applications」快捷方式。若提示无法打开，按住 Control 点图标选打开。
           EOF
           )"
           if gh release view "$TAG" >/dev/null 2>&1; then
