@@ -211,11 +211,14 @@ def rows_to_assets(
         link = _first_http(asset["postLink"])
         if not link:
             continue
+        row_number = start_row + offset
         image = public_image_url(asset["imageUrl"])
         thumb = public_image_url(asset["thumbnailUrl"]) or image
         asset.update(
-            id=hashlib.sha256((asset["postId"] or link).encode()).hexdigest()[:32],
-            rowNumber=start_row + offset, postLink=link, sourceUrl=link, viewUrl=link,
+            # A sheet may contain multiple rows for one post. The gallery stores records
+            # by ID, so an ID based only on post ID/link silently collapses those rows.
+            id=hashlib.sha256(f"{asset['postId'] or link}|row:{row_number}".encode()).hexdigest()[:32],
+            rowNumber=row_number, postLink=link, sourceUrl=link, viewUrl=link,
             title=asset["name"] or asset["pageName"] or asset["postType"] or "素材",
             date=_date_text(_cell(row,index.get("发帖日期"))),
             imageUrl=image, previewUrl=thumb, thumbnailUrl=thumb, thumbnailFallbackUrl=image or thumb,
