@@ -1918,8 +1918,8 @@ class DesktopApp(tk.Tk):
         tk.Label(box, text=" ", bg=C["card"]).pack()
         self._check(box, "汇总后自动发布", self.var_cf_after)
 
-        c5 = self._card(p, "5. 定时同步", "关掉窗口就不再跑")
-        self._note(c5, "可改成 1 小时(60)、3 小时(180) 或 1 天(1440)。打开软件后若已到期会先跑一轮。")
+        c5 = self._card(p, "5. 定时任务", "直接发布模式会定时读取并发布")
+        self._note(c5, "快捷间隔：1 小时、3 小时、6 小时或 1 天。直接读取发布模式会定时读取并发布；筛选汇总模式按当前配置执行。保持软件打开，重开后恢复已保存的定时。")
         g = self._row3(c5)
         self.var_minutes = tk.StringVar(value="1440")
         self._cell(g, 0, "间隔（分钟）", self.var_minutes)
@@ -1947,7 +1947,7 @@ class DesktopApp(tk.Tk):
         self.filter_mapping_box = tk.Frame(c1, bg=C["card"])
         self.filter_mapping_box.pack(fill="x")
         self._filter_mapping_vars = []
-        self._filter_merge_cards = [c2.master, c3.master, c5.master]
+        self._filter_merge_cards = [c2.master, c3.master]
         self._filter_publish_card = c4.master
 
         c7 = self._card(p, "高级选项", collapsed=True)
