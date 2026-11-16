@@ -157,7 +157,7 @@ test('initial loading combines directory/metadata with list and visible polling 
   assert.deepEqual(actions,[]);
 });
 
-test('old Drive view links download originals through the native frame with no Worker or file proxy request',async()=>{
+test('old Drive view links download originals through a direct same-tab download with resource key',async()=>{
   const f=frontend(),clicked=[];
   f.context.document.createElement=()=>({click(){clicked.push({href:this.href,target:this.target,download:this.download});},remove(){}});
   f.context.document.body={appendChild(){}};
@@ -167,9 +167,25 @@ test('old Drive view links download originals through the native frame with no W
   assert.equal(clicked.length,1);
   assert.match(clicked[0].href,/export=download/);
   assert.match(clicked[0].href,/resourcekey=key-one/);
-  assert.equal(clicked[0].target,'assetDownloadFrame');
+  assert.equal(clicked[0].target,'_self');
+  assert.match(f.run(`toDriveDownloadUrl('https://drive.google.com/uc?export=download&id=abcdefghijk123456')`),/^https:\/\/drive\.usercontent\.google\.com\/download\?/);
   assert.equal(f.run(`toDriveDownloadUrl('https://example.com/image.png?id=abcdefghijk123456')`),'');
-  assert.match(f.run(`assetCardHtml(assets[0])`),/target="assetDownloadFrame" download/);
+  assert.match(f.run(`assetCardHtml(assets[0])`),/target="_self"/);
+});
+
+test('legacy assets use sourceUrl for downloads and never turn thumbnail URLs into file links',()=>{
+  const f=frontend();
+  f.run(`
+    const thumb='https://drive.google.com/thumbnail?id=example-thumb-id&sz=w1000';
+    const legacy=normalizeAsset({id:'legacy',sourceUrl:'https://drive.google.com/file/d/example-original-id/view?resourcekey=source-key',downloadUrl:thumb,previewUrl:thumb});
+    const previewOnly=normalizeAsset({id:'preview-only',previewUrl:thumb,image:thumb});
+    window.legacyDownload=getAssetDownloadHref(legacy);
+    window.previewOnlyDownload=getAssetDownloadHref(previewOnly);
+  `);
+  assert.match(f.context.window.legacyDownload,/example-original-id/);
+  assert.match(f.context.window.legacyDownload,/resourcekey=source-key/);
+  assert.doesNotMatch(f.context.window.legacyDownload,/example-thumb-id/);
+  assert.equal(f.context.window.previewOnlyDownload,'');
 });
 
 test('home page displays the material grid beneath compact category navigation',()=>{

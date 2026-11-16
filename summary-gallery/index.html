@@ -1457,7 +1457,7 @@
             <dt>统计</dt>
             <dd id="lightboxStats"></dd>
           </dl>
-          <a class="download-link" id="lightboxDownload" href="#" target="assetDownloadFrame" download referrerpolicy="no-referrer">
+          <a class="download-link" id="lightboxDownload" href="#" target="_self" referrerpolicy="no-referrer">
             <svg><use href="#icon-download"></use></svg>
             下载素材
           </a>
@@ -1466,7 +1466,6 @@
       </div>
     </section>
 
-    <iframe name="assetDownloadFrame" title="文件下载" hidden></iframe>
     <script>
       const API_URL = "/api/gallery";
       const TOKEN_KEY = "summary-gallery-token-v1";
@@ -1474,7 +1473,9 @@
       const ASSET_DB_NAME = "summary-gallery-browser-cache-v1";
       const ASSET_STORE_NAME = "kv";
       const ASSET_CACHE_KEY = "assets";
-      const ASSET_CACHE_SCHEMA = 2;
+      // Download link resolution now relies on the canonical sourceUrl. Force
+      // old browser snapshots to reload the raw published records once.
+      const ASSET_CACHE_SCHEMA = 3;
       const SHARED_JSON_CACHE_NAME = "q-gallery-json-shared-cache-v1";
       const SHARED_JSON_CACHE_KEY = "/q-gallery-json-cache";
       const JSON_CACHE_URL = window.Q_GALLERY_JSON_CACHE_URL || window.Q_GALLERY_DRIVE_CACHE_URL || "/api/gallery?cache=json";
@@ -1809,8 +1810,8 @@
       }
 
       function normalizeAsset(item) {
-        const viewUrl = item.viewUrl || item.previewUrl || "";
-        const downloadUrl = item.downloadUrl || toDriveDownloadUrl(viewUrl || item.previewUrl || item.image || "");
+        const viewUrl = item.sourceUrl || item.viewUrl || item.videoUrl || "";
+        const downloadUrl = item.downloadUrl || toDriveDownloadUrl(viewUrl);
         const fileId =
           item.fileId ||
           extractDriveId(item.sourceUrl || "") ||
@@ -1831,6 +1832,7 @@
           title: item.title || item.type || "未命名素材",
           image: item.previewUrl || item.image || (item.mediaType === "video" ? "" : item.viewUrl) || "",
           previewUrl: item.previewUrl || item.image || "",
+          sourceUrl: item.sourceUrl || viewUrl,
           viewUrl,
           downloadUrl,
           fileId,
@@ -2370,7 +2372,9 @@
           key = parsed.searchParams.get("resourcekey") || parsed.searchParams.get("resourceKey") || "";
         } catch { return ""; }
         if (!id) return "";
-        return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}` + (key ? `&resourcekey=${encodeURIComponent(key)}` : "");
+        // Use Drive's download host. The legacy /uc endpoint may return an
+        // HTML confirmation/preview page when embedded in a hidden iframe.
+        return `https://drive.usercontent.google.com/download?id=${encodeURIComponent(id)}&export=download&confirm=t` + (key ? `&resourcekey=${encodeURIComponent(key)}` : "");
       }
 
       function toDriveThumbnailUrlFromId(id) {
@@ -2387,8 +2391,21 @@
 
       function getAssetDownloadHref(asset) {
         if (!asset) return "";
-        // Old published snapshots stored /view here; normalize them without a re-upload.
-        return toDriveDownloadUrl(asset.downloadUrl || asset.viewUrl) || asset.downloadUrl || (isExternalUrl(asset.viewUrl) ? asset.viewUrl : "");
+        // Prefer a Drive URL carrying its resource key. Older snapshots can
+        // have a key on viewUrl but a keyless synthesized downloadUrl.
+        const candidates = [asset.sourceUrl, asset.viewUrl, asset.videoUrl, asset.downloadUrl]
+          .filter((url) => url && !isDrivePreviewUrl(url));
+        const driveUrls = candidates.map(toDriveDownloadUrl).filter(Boolean);
+        return driveUrls.find((value) => /[?&]resourcekey=/i.test(value)) || driveUrls[0] ||
+          candidates.find(isExternalUrl) || "";
+      }
+
+      function isDrivePreviewUrl(url) {
+        try {
+          const parsed = new URL(url);
+          return (parsed.hostname === "drive.google.com" && parsed.pathname === "/thumbnail") ||
+            parsed.hostname === "lh3.googleusercontent.com";
+        } catch { return false; }
       }
 
       function isExternalUrl(url) {
@@ -2800,7 +2817,7 @@
                 <button class="card-action ${isFavorite ? "is-favorite" : ""}" data-favorite="${escapeHtml(asset.id)}" title="收藏 / 取消收藏（显示累计收藏数）" aria-label="收藏 / 取消收藏">
                   ${icon("heart")}<span>${getFavoriteCount(asset)}</span>
                 </button>
-                <a class="card-action" href="${escapeHtml(downloadHref)}" target="assetDownloadFrame" download referrerpolicy="no-referrer" data-download="${escapeHtml(asset.id)}" title="下载" aria-label="下载">
+                <a class="card-action" href="${escapeHtml(downloadHref)}" target="_self" referrerpolicy="no-referrer" data-download="${escapeHtml(asset.id)}" title="下载" aria-label="下载">
                   ${icon("download")}<span>${getDownloadCount(asset)}</span>
                 </a>
               </div>
@@ -3048,7 +3065,9 @@
             if (extension) filename += '.' + extension[1];
           }
           link.href = href; link.download = drive ? "" : filename.replace(/[\\/:*?"<>|]/g, '_');
-          link.target = drive ? "assetDownloadFrame" : "_self";
+          // Navigate in the current browsing context. Drive's attachment
+          // response starts the download without leaving an extra preview tab.
+          link.target = "_self";
           link.referrerPolicy = "no-referrer";
           document.body.appendChild(link); link.click(); link.remove();
           if (!drive) setTimeout(() => URL.revokeObjectURL(href), 60000);
@@ -3390,13 +3409,17 @@
           }
           if (downloadButton) {
             const href = downloadButton.getAttribute("href") || "";
-            if (!href || href === "#" || !toDriveDownloadUrl(href)) {
+            const directHref = toDriveDownloadUrl(href);
+            if (!href || href === "#" || !directHref) {
               event.preventDefault();
               downloadAsset(downloadButton.dataset.download).catch(showError);
             } else {
-              setTimeout(() => {
-                downloadAsset(downloadButton.dataset.download, { nativeOpen: true }).catch(showError);
-              }, 0);
+              event.preventDefault();
+              // Start navigation synchronously in the trusted click handler;
+              // deferred navigation can be ignored by browser download guards.
+              const countUpdate = downloadAsset(downloadButton.dataset.download, { nativeOpen: true });
+              window.location.assign(directHref);
+              countUpdate.catch(showError);
             }
             return;
           }
@@ -3427,13 +3450,15 @@
           const assetId = event.currentTarget.dataset.download;
           if (assetId) {
             const href = event.currentTarget.getAttribute("href") || "";
-            if (!href || href === "#" || !toDriveDownloadUrl(href)) {
+            const directHref = toDriveDownloadUrl(href);
+            if (!href || href === "#" || !directHref) {
               event.preventDefault();
               downloadAsset(assetId).catch(showError);
             } else {
-              setTimeout(() => {
-                downloadAsset(assetId, { nativeOpen: true }).catch(showError);
-              }, 0);
+              event.preventDefault();
+              const countUpdate = downloadAsset(assetId, { nativeOpen: true });
+              window.location.assign(directHref);
+              countUpdate.catch(showError);
             }
           }
         });
